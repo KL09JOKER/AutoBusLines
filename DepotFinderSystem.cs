@@ -227,6 +227,14 @@ namespace AutoBusLines
                 {
                     ownerEntity = EntityManager.GetComponentData<Owner>(stopEntity).m_Owner;
                 }
+                else if (EntityManager.HasComponent<Attached>(stopEntity))
+                {
+                    var parent = EntityManager.GetComponentData<Attached>(stopEntity).m_Parent;
+                    if (parent != Entity.Null && EntityManager.HasComponent<Owner>(parent))
+                    {
+                        ownerEntity = EntityManager.GetComponentData<Owner>(parent).m_Owner;
+                    }
+                }
 
                 if (ownerEntity != Entity.Null && candidateStationEntities.Contains(ownerEntity))
                 {
@@ -286,6 +294,53 @@ namespace AutoBusLines
                                         StationToPlatforms[stEntity].Add(subEntity);
                                         StationPlatformStops.Add(subEntity);
                                         log.Info($"-> Registered SubObject Platform Stop {subEntity.Index} for Bus Station {stEntity.Index}");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Also check SubNet buffer on candidate stations for internal driveway platform stops
+                if (EntityManager.HasBuffer<Game.Net.SubNet>(stEntity))
+                {
+                    var subNets = EntityManager.GetBuffer<Game.Net.SubNet>(stEntity);
+                    for (int sn = 0; sn < subNets.Length; sn++)
+                    {
+                        var netEntity = subNets[sn].m_SubNet;
+                        if (EntityManager.HasBuffer<Game.Objects.SubObject>(netEntity))
+                        {
+                            var netSubObjects = EntityManager.GetBuffer<Game.Objects.SubObject>(netEntity);
+                            for (int nso = 0; nso < netSubObjects.Length; nso++)
+                            {
+                                var subEntity = netSubObjects[nso].m_SubObject;
+                                if (EntityManager.HasComponent<Game.Routes.TransportStop>(subEntity) &&
+                                    EntityManager.HasComponent<PrefabRef>(subEntity))
+                                {
+                                    var prefab = EntityManager.GetComponentData<PrefabRef>(subEntity).m_Prefab;
+                                    if (IsOutsideConnection(subEntity, prefab))
+                                        continue;
+
+                                    if (EntityManager.HasComponent<TransportStopData>(prefab))
+                                    {
+                                        var stopData = EntityManager.GetComponentData<TransportStopData>(prefab);
+                                        if (stopData.m_TransportType == TransportType.Bus && stopData.m_PassengerTransport)
+                                        {
+                                            if (!BusStations.Contains(stEntity))
+                                            {
+                                                BusStations.Add(stEntity);
+                                                AllHubs.Add(new HubInfo { HubEntity = stEntity, Position = candidateStationPositions[s], IsStation = true });
+                                                StationToPlatforms[stEntity] = new List<Entity>();
+                                                log.Info($"Found Bus Station {stEntity.Index} from SubNet at {candidateStationPositions[s]}");
+                                            }
+
+                                            if (!StationToPlatforms[stEntity].Contains(subEntity))
+                                            {
+                                                StationToPlatforms[stEntity].Add(subEntity);
+                                                StationPlatformStops.Add(subEntity);
+                                                log.Info($"-> Registered SubNet Platform Stop {subEntity.Index} for Bus Station {stEntity.Index}");
+                                            }
+                                        }
                                     }
                                 }
                             }

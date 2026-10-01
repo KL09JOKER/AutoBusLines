@@ -128,7 +128,7 @@ namespace AutoBusLines
         }
 
         [SettingsUISection(kSection, kRouteGroup)]
-        [SettingsUISlider(min = 2, max = 30, step = 1, unit = Unit.kInteger)]
+        [SettingsUISlider(min = 4, max = 30, step = 1, unit = Unit.kInteger)]
         public int MinStopsPerLine { get; set; } = 6;
 
         [SettingsUISection(kSection, kRouteGroup)]
@@ -136,8 +136,8 @@ namespace AutoBusLines
         public int MaxStopsPerLine { get; set; } = 18;
 
         [SettingsUISection(kSection, kRouteGroup)]
-        [SettingsUISlider(min = 1000, max = 30000, step = 500, unit = Unit.kLength)]
-        public int MaxRouteLength { get; set; } = 10000;
+        [SettingsUISlider(min = 2000, max = 50000, step = 500, unit = Unit.kLength)]
+        public int MaxRouteLength { get; set; } = 15000;
 
         [SettingsUISection(kSection, kSpacingGroup)]
         [SettingsUISlider(min = 60, max = 300, step = 10, unit = Unit.kLength)]
@@ -151,7 +151,7 @@ namespace AutoBusLines
             SelectedStopPrefab = "All";
             MinStopsPerLine = 6;
             MaxStopsPerLine = 18;
-            MaxRouteLength = 10000;
+            MaxRouteLength = 15000;
             MinStopSpacing = 120;
         }
     }
@@ -189,10 +189,10 @@ namespace AutoBusLines
                 { m_Setting.GetOptionDescLocaleID(nameof(Setting.MinStopsPerLine)), "Minimum number of bus stops required to form a valid bus transit line (default: 6)." },
 
                 { m_Setting.GetOptionLabelLocaleID(nameof(Setting.MaxStopsPerLine)), "Maximum Stops Per Line" },
-                { m_Setting.GetOptionDescLocaleID(nameof(Setting.MaxStopsPerLine)), "Maximum number of bus stops on a single bus route before closing the loop (default: 16)." },
+                { m_Setting.GetOptionDescLocaleID(nameof(Setting.MaxStopsPerLine)), "Maximum number of bus stops on a single bus route before closing the loop (default: 18)." },
 
                 { m_Setting.GetOptionLabelLocaleID(nameof(Setting.MaxRouteLength)), "Maximum Route Length" },
-                { m_Setting.GetOptionDescLocaleID(nameof(Setting.MaxRouteLength)), "Maximum perimeter distance of a bus loop (default: 10,000m / 10km). Loops exceeding this length are split into smaller routes." },
+                { m_Setting.GetOptionDescLocaleID(nameof(Setting.MaxRouteLength)), "Maximum perimeter distance of a bus loop (default: 15,000m / 15km). Loops exceeding this length are split into smaller routes." },
 
                 { m_Setting.GetOptionLabelLocaleID(nameof(Setting.MinStopSpacing)), "Minimum Stop Spacing" },
                 { m_Setting.GetOptionDescLocaleID(nameof(Setting.MinStopSpacing)), "Minimum distance required between any two bus stops to prevent clustering near intersections and corners (default: 120m)." },

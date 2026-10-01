@@ -58,7 +58,7 @@ namespace AutoBusLines
         private EntityQuery _existingBusStopQuery;
 
         private const float HUB_EXCLUSION_RADIUS = 60f;             // Exclusion radius around stations & depots (passengers use station bays)
-        private const float MAX_ROUTE_LENGTH_METERS = 10000f;         // Maximum bus loop length: 10 km
+        public const float DEFAULT_MAX_ROUTE_LENGTH = 15000f;       // Default maximum bus loop length: 15 km
         private const int MIN_STOPS_PER_LINE = 6;                   // Minimum stops per bus loop
         private const int MAX_STOPS_PER_LINE = 16;                  // Maximum stops per bus loop
         private const float SIDEWALK_OFFSET = 5.0f;                 // Distance from road centerline to sidewalk stop (meters)
@@ -870,7 +870,7 @@ namespace AutoBusLines
                 while (_currentTourIndex < _plannedTours.Count && routesCreatedThisTick < ROUTES_PER_FRAME)
                 {
                     var tour = _plannedTours[_currentTourIndex];
-                    if (tour.Count >= 2)
+                    if (tour.Count >= 4)
                     {
                         int lineNumber = _currentTourIndex + 1;
                         float routeDistanceKm = CalculateTourLength(tour) / 1000f;
@@ -1062,10 +1062,12 @@ namespace AutoBusLines
             // -------------------------------------------------------------
             int minStopsPerLine = Mod.setting != null ? Mod.setting.MinStopsPerLine : MIN_STOPS_PER_LINE;
             int maxStopsPerLine = Mod.setting != null ? Mod.setting.MaxStopsPerLine : MAX_STOPS_PER_LINE;
+            float maxRouteLength = Mod.setting != null ? (float)Mod.setting.MaxRouteLength : DEFAULT_MAX_ROUTE_LENGTH;
             float minStopSpacing = Mod.setting != null ? Mod.setting.MinStopSpacing : ABSOLUTE_MIN_STOP_SPACING;
 
             if (minStopsPerLine < 4) minStopsPerLine = 4;
             if (maxStopsPerLine < minStopsPerLine) maxStopsPerLine = minStopsPerLine;
+            if (maxRouteLength < 2000f) maxRouteLength = 2000f;
             if (minStopSpacing < 5f) minStopSpacing = 5f;
 
             var allCorridors = BuildCorridors();
@@ -1164,9 +1166,31 @@ namespace AutoBusLines
             // STEP 3: Plan the bus loops (see BusLineGenerator.Planning.cs)
             // Builds validated closed cycles of legal, connected road edges: one-way directions are
             // respected, hairpin U-turns are only used at dead ends, and every loop stays within
-            // MAX_ROUTE_LENGTH_METERS.
+            // maxRouteLength.
             // -------------------------------------------------------------
-            var allTours = PlanTours(allGlobalStops, allCorridors, minStopsPerLine, maxStopsPerLine, out var servedStopEntities);
+            var allTours = PlanTours(allGlobalStops, allCorridors, minStopsPerLine, maxStopsPerLine, maxRouteLength, out var servedStopEntities);
+
+            // Ensure any station platform bays included in planned tours are present in allGlobalStops for accurate tracking
+            for (int t = 0; t < allTours.Count; t++)
+            {
+                var tour = allTours[t];
+                for (int s = 0; s < tour.Count; s++)
+                {
+                    bool found = false;
+                    for (int g = 0; g < allGlobalStops.Count; g++)
+                    {
+                        if (allGlobalStops[g].StopEntity == tour[s].StopEntity)
+                        {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found)
+                    {
+                        allGlobalStops.Add(tour[s]);
+                    }
+                }
+            }
 
             if (allTours.Count == 0)
             {

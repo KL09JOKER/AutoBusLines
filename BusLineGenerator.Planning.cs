@@ -11,7 +11,7 @@
 //   * FindShortestRoadPath is a proper edge-state search, so the "no hairpin U-turn" rule can
 //     no longer hide valid paths, and dead ends (where the game does allow a U-turn) work.
 //   * Every candidate loop goes through ValidateCycle: legal one-way direction, contiguous,
-//     no illegal hairpin, and <= MAX_ROUTE_LENGTH_METERS (which was declared but never enforced).
+//     no illegal hairpin, and <= maxRouteLength.
 //   * Phase A orients the second corridor against the first (it always assumed "reversed").
 //   * Phase B plans a real turnaround at corridor ends instead of an implicit U-turn.
 //   * Phases D/F insert stops where they cost the least detour instead of "after the nearest stop".
@@ -75,6 +75,7 @@ namespace AutoBusLines
             public HashSet<int> UsedCorridors = new HashSet<int>();
             public int MinStops;
             public int MaxStops;
+            public float MaxRouteLength;
 
             // Per-stop caches, indexed like Stops
             public Dictionary<Entity, int> StopIndex = new Dictionary<Entity, int>();
@@ -365,7 +366,7 @@ namespace AutoBusLines
         /// A cycle is only usable if every edge is driven in a legal direction, the edges join up
         /// (and close), no joint is an illegal hairpin, and the loop respects the length cap.
         /// </summary>
-        private bool ValidateCycle(List<DirectedRoadEdge> cycle, Dictionary<Entity, List<DirectedRoadEdge>> nodeOutEdges, out float totalLength)
+        private bool ValidateCycle(List<DirectedRoadEdge> cycle, Dictionary<Entity, List<DirectedRoadEdge>> nodeOutEdges, out float totalLength, float maxRouteLength)
         {
             totalLength = 0f;
             int n = cycle.Count;
@@ -385,7 +386,7 @@ namespace AutoBusLines
                 if (!CanTurn(e.ToNode, e.TangentAtTo, next.TangentAtFrom))
                     return false;
             }
-            return totalLength <= MAX_ROUTE_LENGTH_METERS;
+            return totalLength <= maxRouteLength;
         }
 
         private static List<DirectedRoadEdge> Concat(params List<DirectedRoadEdge>[] parts)
@@ -405,6 +406,7 @@ namespace AutoBusLines
             List<RoadCorridor> allCorridors,
             int minStopsPerLine,
             int maxStopsPerLine,
+            float maxRouteLength,
             out HashSet<Entity> servedStopEntities)
         {
             var ctx = new PlanContext
@@ -412,19 +414,22 @@ namespace AutoBusLines
                 Stops = allGlobalStops,
                 Corridors = allCorridors,
                 MinStops = minStopsPerLine,
-                MaxStops = maxStopsPerLine
+                MaxStops = maxStopsPerLine,
+                MaxRouteLength = maxRouteLength
             };
 
             BuildDirectedRoadGraph(out ctx.NodeOutEdges, out ctx.NodePositions);
             IndexStopsByDirectedEdge(allGlobalStops, out ctx.EdgeForwardStops, out ctx.EdgeBackwardStops);
             PrecomputeStopInfo(ctx);
 
+            PlanStationHubLoops(ctx);
             PlanTrunkCouplets(ctx);
             PlanSingleCorridorLoops(ctx);
             PlanFeederLoops(ctx);
             PlanDirectInsertions(ctx);
-            PlanResidualLoops(ctx);
             PlanLastMileInsertions(ctx);
+            PlanResidualLoops(ctx);
+            ConsolidateSmallTours(ctx);
 
             // Fallback: no tours at all (tiny isolated town) -> one simple line
             if (ctx.Tours.Count == 0 && allGlobalStops.Count >= 2)
@@ -507,6 +512,214 @@ namespace AutoBusLines
         }
 
         // ------------------------------------------------------------------
+        // Phase 0: Bus Station Terminal Lines
+        // Every passenger Bus Station gets dedicated neighborhood lines originating from platform bays
+        // ------------------------------------------------------------------
+
+        private void PlanStationHubLoops(PlanContext ctx)
+        {
+            if (_depotFinder == null || _depotFinder.BusStations.Length == 0)
+                return;
+
+            int stationCount = _depotFinder.BusStations.Length;
+            log.Info($"PlanStationHubLoops: Planning dedicated bus terminal lines for {stationCount} bus stations...");
+
+            int totalStationLines = 0;
+            int totalStationsServed = 0;
+
+            for (int s = 0; s < stationCount; s++)
+            {
+                var stationEntity = _depotFinder.BusStations[s];
+                if (!_depotFinder.StationToPlatforms.TryGetValue(stationEntity, out var platforms) || platforms.Count == 0)
+                    continue;
+
+                // Collect valid platform bay stops
+                var platformStops = new List<PlacedStop>();
+                for (int p = 0; p < platforms.Count; p++)
+                {
+                    var pEntity = platforms[p];
+                    if (!EntityManager.Exists(pEntity) || !EntityManager.HasComponent<Game.Objects.Transform>(pEntity))
+                        continue;
+
+                    var tr = EntityManager.GetComponentData<Game.Objects.Transform>(pEntity);
+                    float3 forward = math.mul(tr.m_Rotation, new float3(0, 0, 1));
+
+                    Entity attachedRoad = Entity.Null;
+                    if (EntityManager.HasComponent<Game.Objects.Attached>(pEntity))
+                        attachedRoad = EntityManager.GetComponentData<Game.Objects.Attached>(pEntity).m_Parent;
+                    else if (EntityManager.HasComponent<Game.Common.Owner>(pEntity))
+                        attachedRoad = EntityManager.GetComponentData<Game.Common.Owner>(pEntity).m_Owner;
+
+                    platformStops.Add(new PlacedStop
+                    {
+                        StopEntity = pEntity,
+                        Position = tr.m_Position,
+                        Forward = forward,
+                        RoadEntity = attachedRoad,
+                        HubEntity = stationEntity,
+                        IsOutbound = true
+                    });
+                }
+
+                if (platformStops.Count == 0)
+                    continue;
+
+                float3 stationPos = platformStops[0].Position;
+                if (EntityManager.HasComponent<Game.Objects.Transform>(stationEntity))
+                {
+                    stationPos = EntityManager.GetComponentData<Game.Objects.Transform>(stationEntity).m_Position;
+                }
+
+                // 1. Gather unserved candidate curbside stops within maxStationRadius of this station
+                float maxStationRadius = math.min(2500f, ctx.MaxRouteLength * 0.30f);
+                var candidateStops = new List<PlacedStop>();
+                var candidateSet = new HashSet<Entity>();
+
+                for (int i = 0; i < ctx.Stops.Count; i++)
+                {
+                    var stop = ctx.Stops[i];
+                    if (ctx.Served.Contains(stop.StopEntity) || candidateSet.Contains(stop.StopEntity))
+                        continue;
+                    if (!ctx.HasEdge[i])
+                        continue;
+
+                    float dist = math.distance(stop.Position, stationPos);
+                    if (dist <= maxStationRadius)
+                    {
+                        candidateStops.Add(stop);
+                        candidateSet.Add(stop.StopEntity);
+                    }
+                }
+
+                // Suppress any curbside stop that is within 80m of the station (right in front of the platform/driveway)
+                for (int i = candidateStops.Count - 1; i >= 0; i--)
+                {
+                    var cs = candidateStops[i];
+                    if (math.distance(cs.Position, stationPos) < 80f)
+                    {
+                        ctx.Served.Add(cs.StopEntity);
+                        candidateSet.Remove(cs.StopEntity);
+                        candidateStops.RemoveAt(i);
+                        log.Info($"PlanStationHubLoops: Suppressed redundant curbside stop {cs.StopEntity.Index} within 80m of Bus Station {stationEntity.Index}.");
+                    }
+                }
+
+                if (candidateStops.Count < 3)
+                {
+                    log.Info($"PlanStationHubLoops: Bus Station {stationEntity.Index} at {stationPos} has only {candidateStops.Count} nearby stops within {maxStationRadius:F0}m; skipping dedicated lines.");
+                    continue;
+                }
+
+                // Sort candidate stops by proximity to the station
+                candidateStops.Sort((a, b) => math.distance(a.Position, stationPos).CompareTo(math.distance(b.Position, stationPos)));
+
+                int bayIndex = 0;
+                int stationLinesCreated = 0;
+
+                while (candidateStops.Count >= 3 && bayIndex < platformStops.Count)
+                {
+                    var bay = platformStops[bayIndex];
+                    bayIndex++;
+
+                    // Sort remaining candidates by proximity to the station
+                    candidateStops.Sort((a, b) => math.distance(a.Position, stationPos).CompareTo(math.distance(b.Position, stationPos)));
+
+                    var tour = new List<PlacedStop>();
+                    tour.Add(bay);
+
+                    var tourSet = new HashSet<Entity>();
+
+                    // Pick the closest unserved candidate stop as the first stop after leaving the station
+                    var firstStop = candidateStops[0];
+                    tour.Add(firstStop);
+                    tourSet.Add(firstStop.StopEntity);
+
+                    int currentCtxIdx = ctx.StopIndex[firstStop.StopEntity];
+                    float3 currentPos = firstStop.Position;
+                    float totalRoadDist = math.distance(bay.Position, firstStop.Position) * 1.35f;
+
+                    int maxStopsForThisTour = math.min(ctx.MaxStops - 1, candidateStops.Count);
+
+                    for (int step = 1; step < maxStopsForThisTour; step++)
+                    {
+                        int bestIdx = -1;
+                        float bestLegDist = float.MaxValue;
+
+                        for (int c = 0; c < candidateStops.Count; c++)
+                        {
+                            var cand = candidateStops[c];
+                            if (tourSet.Contains(cand.StopEntity))
+                                continue;
+
+                            float straightDist = math.distance(currentPos, cand.Position);
+                            if (straightDist > 2000f || straightDist >= bestLegDist)
+                                continue;
+
+                            if (!ctx.StopIndex.TryGetValue(cand.StopEntity, out int candCtxIdx))
+                                continue;
+
+                            // Calculate real driving distance along the road network in the legal travel direction
+                            if (!TryLegLength(ctx, currentCtxIdx, candCtxIdx, 2500f, out float legDist))
+                                continue;
+
+                            if (legDist < bestLegDist)
+                            {
+                                bestLegDist = legDist;
+                                bestIdx = c;
+                            }
+                        }
+
+                        if (bestIdx < 0)
+                            break;
+
+                        var chosen = candidateStops[bestIdx];
+
+                        // Estimated distance from chosen stop back to the station platform bay
+                        float returnDistEst = math.distance(chosen.Position, bay.Position) * 1.35f;
+
+                        // Check if adding this stop would push the total route length beyond MaxRouteLength
+                        if (tour.Count >= math.max(4, ctx.MinStops) && (totalRoadDist + bestLegDist + returnDistEst > ctx.MaxRouteLength))
+                        {
+                            break;
+                        }
+
+                        tour.Add(chosen);
+                        tourSet.Add(chosen.StopEntity);
+                        totalRoadDist += bestLegDist;
+
+                        currentPos = chosen.Position;
+                        currentCtxIdx = ctx.StopIndex[chosen.StopEntity];
+                    }
+
+                    if (tour.Count >= 4)
+                    {
+                        // Calculate final total road length (including return to station)
+                        float finalLength = totalRoadDist + math.distance(currentPos, bay.Position) * 1.35f;
+
+                        AcceptTour(ctx, tour);
+                        ctx.Served.Add(bay.StopEntity);
+
+                        // Remove chosen stops from candidate pool
+                        candidateStops.RemoveAll(s => tourSet.Contains(s.StopEntity));
+
+                        stationLinesCreated++;
+                        totalStationLines++;
+                        log.Info($"PlanStationHubLoops: Created Station Line #{ctx.Tours.Count} for Bus Station {stationEntity.Index} with {tour.Count} stops (Bay {bay.StopEntity.Index} as Origin/Terminal, Est. Road Length: {finalLength / 1000f:F1} km).");
+                    }
+                    else
+                    {
+                        break;
+                    }
+                }
+
+                if (stationLinesCreated > 0)
+                    totalStationsServed++;
+            }
+
+            log.Info($"PlanStationHubLoops Complete: Successfully planned {totalStationLines} bus terminal lines across {totalStationsServed} of {stationCount} bus stations.");
+        }
+
+        // ------------------------------------------------------------------
         // Phase A: paired arterial couplets (two parallel corridors joined into one loop)
         // ------------------------------------------------------------------
 
@@ -514,7 +727,7 @@ namespace AutoBusLines
         {
             var used = new HashSet<int>();
             var corridors = ctx.Corridors;
-            int minPairStops = math.min(ctx.MinStops, 4);
+            int minPairStops = math.max(4, ctx.MinStops);
 
             var stopCounts = new int[corridors.Count];
             for (int c = 0; c < corridors.Count; c++)
@@ -607,7 +820,7 @@ namespace AutoBusLines
 
                         var cycle = Concat(chainA, cross1, chainB, cross2);
                         float len;
-                        if (!ValidateCycle(cycle, ctx.NodeOutEdges, out len))
+                        if (!ValidateCycle(cycle, ctx.NodeOutEdges, out len, ctx.MaxRouteLength))
                             continue;
 
                         if (len < bestLen)
@@ -686,13 +899,13 @@ namespace AutoBusLines
 
                 var cycle = Concat(chainFwd, endTurn, chainRev, startTurn);
                 float len;
-                if (!ValidateCycle(cycle, ctx.NodeOutEdges, out len))
+                if (!ValidateCycle(cycle, ctx.NodeOutEdges, out len, ctx.MaxRouteLength))
                     continue;
 
                 var tour = BuildTourFromRoadCycle(cycle, ctx.EdgeForwardStops, ctx.EdgeBackwardStops, ctx.MaxStops);
                 // Corridors with only a stop or two are better chained into neighbourhood loops (Phase C)
                 // than given a 2-stop line of their own.
-                if (tour.Count >= math.min(ctx.MinStops, 4) && len / tour.Count <= MAX_AVG_STOP_SPACING)
+                if (tour.Count >= math.max(4, ctx.MinStops) && len / tour.Count <= MAX_AVG_STOP_SPACING)
                 {
                     AcceptTour(ctx, tour);
                     used.Add(i);
@@ -771,7 +984,7 @@ namespace AutoBusLines
                         // Keep room in the length budget for this leg plus (at least) the straight way home
                         float3 toPos;
                         float homeLb = ctx.NodePositions.TryGetValue(cd.ToNode, out toPos) ? math.distance(toPos, seedFromPos) : 0f;
-                        if (length + cands[k].Bound + cd.Length + homeLb > MAX_ROUTE_LENGTH_METERS)
+                        if (length + cands[k].Bound + cd.Length + homeLb > ctx.MaxRouteLength)
                             continue;
 
                         var path = FindShortestRoadPath(currNode, cd.FromNode, currHeading, ctx.NodeOutEdges, ctx.NodePositions, 1500f, false, cd.TangentAtFrom);
@@ -815,7 +1028,7 @@ namespace AutoBusLines
                         cycle.AddRange(returnPath);
 
                         float len;
-                        if (ValidateCycle(cycle, ctx.NodeOutEdges, out len))
+                        if (ValidateCycle(cycle, ctx.NodeOutEdges, out len, ctx.MaxRouteLength))
                         {
                             acceptedCycle = cycle;
                             break;
@@ -840,7 +1053,8 @@ namespace AutoBusLines
                 }
 
                 var tour = BuildTourFromRoadCycle(acceptedCycle, ctx.EdgeForwardStops, ctx.EdgeBackwardStops, ctx.MaxStops);
-                if (tour.Count >= 2)
+                int minFeederStops = math.max(4, ctx.MinStops);
+                if (tour.Count >= minFeederStops)
                 {
                     AcceptTour(ctx, tour);
                     log.Info($"Built Neighborhood Feeder Loop #{ctx.Tours.Count} with {tour.Count} stops.");
@@ -926,15 +1140,88 @@ namespace AutoBusLines
                 cycle.AddRange(returnPath);
 
                 float len;
-                if (!ValidateCycle(cycle, ctx.NodeOutEdges, out len))
+                if (!ValidateCycle(cycle, ctx.NodeOutEdges, out len, ctx.MaxRouteLength))
                     continue;
 
                 var tour = BuildTourFromRoadCycle(cycle, ctx.EdgeForwardStops, ctx.EdgeBackwardStops, ctx.MaxStops);
-                if (tour.Count >= 2)
+                int minResidualStops = math.max(4, ctx.MinStops);
+                if (tour.Count >= minResidualStops)
                 {
                     AcceptTour(ctx, tour);
                     log.Info($"Built Residual Feeder Loop #{ctx.Tours.Count} with {tour.Count} stops.");
                 }
+            }
+        }
+
+        // Dissolves any tour with fewer than 4 stops (e.g. 2-3 stops), absorbing its stops into neighboring tours
+        private void ConsolidateSmallTours(PlanContext ctx)
+        {
+            int minAllowed = 4;
+
+            for (int ti = ctx.Tours.Count - 1; ti >= 0; ti--)
+            {
+                var tour = ctx.Tours[ti];
+                if (tour.Count >= minAllowed)
+                    continue;
+
+                // Never dissolve a station terminal line
+                if (tour.Count > 0 && tour[0].HubEntity != Entity.Null)
+                    continue;
+
+                bool allAbsorbed = true;
+                for (int s = 0; s < tour.Count; s++)
+                {
+                    var stop = tour[s];
+
+                    int bestTourIdx = -1;
+                    int bestInsertPos = -1;
+                    float bestDetour = float.MaxValue;
+
+                    for (int o = 0; o < ctx.Tours.Count; o++)
+                    {
+                        if (o == ti)
+                            continue;
+                        var other = ctx.Tours[o];
+                        if (other.Count >= ctx.MaxStops)
+                            continue;
+
+                        // Do not dump external stops into station terminal lines
+                        if (other.Count > 0 && other[0].HubEntity != Entity.Null)
+                            continue;
+
+                        int on = other.Count;
+                        for (int i = 0; i < on; i++)
+                        {
+                            var a = other[i];
+                            var b = other[(i + 1) % on];
+                            float da = math.distance(a.Position, stop.Position);
+                            float db = math.distance(b.Position, stop.Position);
+                            if (math.min(da, db) > 500f)
+                                continue;
+
+                            float detour = (da + db) - math.distance(a.Position, b.Position);
+                            if (detour < bestDetour)
+                            {
+                                bestDetour = detour;
+                                bestTourIdx = o;
+                                bestInsertPos = i + 1;
+                            }
+                        }
+                    }
+
+                    if (bestTourIdx >= 0 && bestDetour < 1000f && (CalculateTourLength(ctx.Tours[bestTourIdx]) + bestDetour <= ctx.MaxRouteLength))
+                    {
+                        ctx.Tours[bestTourIdx].Insert(bestInsertPos, stop);
+                    }
+                    else
+                    {
+                        allAbsorbed = false;
+                        ctx.Served.Remove(stop.StopEntity);
+                    }
+                }
+
+                log.Info($"ConsolidateSmallTours: Dissolved small tour #{ti + 1} with only {tour.Count} stops (absorbed into nearby lines: {allAbsorbed}).");
+                ctx.Tours.RemoveAt(ti);
             }
         }
 
@@ -1029,7 +1316,7 @@ namespace AutoBusLines
                     }
                 }
 
-                if (found && bestDetour <= LASTMILE_MAX_DETOUR)
+                if (found && bestDetour <= LASTMILE_MAX_DETOUR && (CalculateTourLength(ctx.Tours[best.Tour]) + bestDetour <= ctx.MaxRouteLength))
                 {
                     ctx.Tours[best.Tour].Insert(best.Pos, stop);
                     ctx.Served.Add(stop.StopEntity);
@@ -1083,7 +1370,7 @@ namespace AutoBusLines
                 totalLength += tourLen;
                 longestTour = math.max(longestTour, tourLen);
 
-                if (badLegs > 0 || tourLen > MAX_ROUTE_LENGTH_METERS)
+                if (badLegs > 0 || tourLen > ctx.MaxRouteLength)
                 {
                     problemTours++;
                     log.Warn($"Planner check: Line #{ti + 1} has {n} stops, est. {tourLen / 1000f:F1} km, {badLegs} leg(s) with no legal path in the planner's road graph");
