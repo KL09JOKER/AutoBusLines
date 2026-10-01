@@ -35,3 +35,7 @@ decompiled_setuppathfind.txt
 # AI / Agent workspaces
 .agents/
 .claude/
+
+# Paradox publishing config & profiles (local to machine)
+Properties/
+
