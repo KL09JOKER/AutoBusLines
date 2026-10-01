@@ -3,6 +3,7 @@
 [![Paradox Mods](https://img.shields.io/badge/Paradox%20Mods-161531-blue.svg)](https://mods.paradoxplaza.com/mods/161531/Windows)
 [![Cities: Skylines II](https://img.shields.io/badge/Cities:%20Skylines%20II-Mod-orange.svg)](https://www.paradoxinteractive.com/games/cities-skylines-ii)
 [![Status](https://img.shields.io/badge/Status-Beta-yellow.svg)](https://mods.paradoxplaza.com/mods/161531/Windows)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE.md)
 
 An automated public transit mod for **Cities: Skylines II** that plans, places roadside bus stops with safe mid-span road clearances, generates balanced 2-Opt loop routes, and connects them directly to your city's bus depots and passenger terminals.
 
@@ -30,20 +31,14 @@ Available on Paradox Mods: **[Auto Bus Lines on Paradox Mods](https://mods.parad
 
 ---
 
-## How to Use
+## Contributing & Collaboration
 
-1. Build at least one **Bus Depot** or **Passenger Bus Terminal** in your city.
-2. Open **Options > Mod Settings > Auto Bus Lines**.
-3. Click **"Generate Bus Lines Now"** (or enable *Auto Generate On Load* to automatically plan on city load).
-4. Enjoy your automated transit network! If you reconfigure roads later, open settings and click **"Repair Broken Bus Lines"**.
-
-The compiled mod will be automatically deployed by the modding toolchain to:
-`%LocalAppData%\..\LocalLow\Colossal Order\Cities Skylines II\Mods\AutoBusLines`
+Contributions, bug fixes, suggestions, and localization updates are welcome!
+- To contribute, fork this repository and submit a **Pull Request**.
+- Please describe the issue or enhancement clearly in your PR.
 
 ---
 
 ## License
-
-This project is licensed under a **Source-Available Collaborative Modding License** (see [LICENSE.md](LICENSE.md)).
-- ✅ **Allowed**: Inspecting code, compiling locally for personal play, forking to submit Pull Requests to this official repository.
-- ❌ **Prohibited**: Re-uploading, mirroring, or redistributing this mod (source or compiled binaries) to Paradox Mods, Steam Workshop, NexusMods, or any other platform without explicit written permission from the author.
+ 
+This project is open-source software licensed under the **GNU General Public License v3.0 (GPL-3.0)**. See the [LICENSE.md](LICENSE.md) file for details.
