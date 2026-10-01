@@ -1,0 +1,37 @@
+# Build & Compilation outputs
+bin/
+obj/
+Library/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Decompiled game code & internal reverse engineering references
+Reference/
+Inspector/
+
+# Scratch & Temporary files
+*.patch
+*.zip
+*.log
+*.tmp
+*.bak
+CLAUDE.md
+SESSION_SUMMARY.md
+skills-lock.json
+ui_plan.html
+create_object_il.txt
+decompiled_job.txt
+decompiled_setuppathfind.txt
+
+# IDE & Editor files
+.vs/
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# AI / Agent workspaces
+.agents/
+.claude/
