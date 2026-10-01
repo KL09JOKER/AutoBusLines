@@ -37,30 +37,8 @@ Available on Paradox Mods: **[Auto Bus Lines on Paradox Mods](https://mods.parad
 3. Click **"Generate Bus Lines Now"** (or enable *Auto Generate On Load* to automatically plan on city load).
 4. Enjoy your automated transit network! If you reconfigure roads later, open settings and click **"Repair Broken Bus Lines"**.
 
----
-
-## Building from Source
-
-### Prerequisites
-- Windows 10/11
-- .NET 8.0 SDK (for building the .NET Framework 4.8 mod project)
-- *Cities: Skylines II* installed
-- Cities: Skylines II Modding Toolchain configured (`CSII_TOOLPATH`, `CSII_MANAGEDPATH` environment variables set)
-
-### Build
-```shell
-dotnet build -c Release
-```
 The compiled mod will be automatically deployed by the modding toolchain to:
 `%LocalAppData%\..\LocalLow\Colossal Order\Cities Skylines II\Mods\AutoBusLines`
-
----
-
-## Contributing & Collaboration
-
-Contributions, bug fixes, suggestions, and localization updates are welcome!
-- To contribute, fork this repository and submit a **Pull Request**.
-- Please describe the issue or enhancement clearly in your PR.
 
 ---
 
