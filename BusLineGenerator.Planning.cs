@@ -557,7 +557,9 @@ namespace AutoBusLines
                         Forward = forward,
                         RoadEntity = attachedRoad,
                         HubEntity = stationEntity,
-                        IsOutbound = true
+                        IsOutbound = true,
+                        IsStationBay = true,
+                        IsPreExisting = true
                     });
                 }
 

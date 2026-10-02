@@ -39,3 +39,6 @@ decompiled_setuppathfind.txt
 # Paradox publishing config & profiles (local to machine)
 Properties/
 
+# UI mod build & dependencies
+auto-bus-lines-ui/node_modules/
+auto-bus-lines-ui/build/

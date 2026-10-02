@@ -37,6 +37,19 @@ namespace AutoBusLines
         public bool AutoGenerateOnLoad { get; set; } = true;
 
         [SettingsUISection(kSection, kMainGroup)]
+        public bool EnablePlanMode { get; set; } = true;
+
+        [SettingsUISection(kSection, kMainGroup)]
+        [SettingsUIButton]
+        public bool OpenTransitPlanner
+        {
+            set
+            {
+                AutoBusLinesUISystem.Instance?.OpenPanel();
+            }
+        }
+
+        [SettingsUISection(kSection, kMainGroup)]
         [SettingsUIButton]
         [SettingsUIConfirmation]
         public bool TriggerScanNow
@@ -223,6 +236,7 @@ namespace AutoBusLines
         public override void SetDefaults()
         {
             AutoGenerateOnLoad = true;
+            EnablePlanMode = true;
             SelectedStopPrefab = "All";
             MinStopsPerLine = 6;
             MaxStopsPerLine = 18;
@@ -248,6 +262,10 @@ namespace AutoBusLines
                 { m_Setting.GetSettingsLocaleID(), "Auto Bus Lines" },
                 { m_Setting.GetOptionLabelLocaleID(nameof(Setting.AutoGenerateOnLoad)), "Auto Generate On Load" },
                 { m_Setting.GetOptionDescLocaleID(nameof(Setting.AutoGenerateOnLoad)), "Automatically place bus stops and generate bus lines connecting all roads to the nearest bus depot when a save is loaded." },
+                { m_Setting.GetOptionLabelLocaleID(nameof(Setting.EnablePlanMode)), "Preview Plan Before Building" },
+                { m_Setting.GetOptionDescLocaleID(nameof(Setting.EnablePlanMode)), "When enabled, proposed bus lines and stops are shown in an interactive in-game preview window. You can toggle off individual stops or entire lines, calculate alternative networks, or build only what you select." },
+                { m_Setting.GetOptionLabelLocaleID(nameof(Setting.OpenTransitPlanner)), "Open Transit Planner Window" },
+                { m_Setting.GetOptionDescLocaleID(nameof(Setting.OpenTransitPlanner)), "Opens the interactive Transit Planner window to preview, inspect, customize, and build bus networks." },
                 { m_Setting.GetOptionLabelLocaleID(nameof(Setting.TriggerScanNow)), "Generate Bus Lines Now" },
                 { m_Setting.GetOptionDescLocaleID(nameof(Setting.TriggerScanNow)), "Manually trigger bus stop placement and bus line generation across all paved roads in the city." },
                 { m_Setting.GetOptionWarningLocaleID(nameof(Setting.TriggerScanNow)), "This will place bus stops on paved roads and create bus transit lines connected to the nearest depot/station. Continue?" },

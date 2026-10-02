@@ -13,6 +13,13 @@ Available on Paradox Mods: **[Auto Bus Lines on Paradox Mods](https://mods.parad
 
 ## Features
 
+- 🗺️ **Interactive In-Game Plan Mode (Preview Window)**:
+  - Preview proposed bus lines and stops in a floating in-game window before constructing anything in the city.
+  - **Line & Stop Toggles**: Toggle off individual stop locations or entire proposed bus lines to customize the network prior to building.
+  - **Alternative Plan Generator**: Click **[New Plan]** to calculate alternative network layouts with different corridor pairings and loop topologies.
+  - **Build Selected or Discard**: Build only what you approve with **[Build Selected]**, or inspect the plan for inspiration and safely **[Discard]** without altering your city.
+  - **Camera Focus**: Click the Focus button on any proposed stop to fly the camera straight to that location in the city.
+  - **Top-Right Toolbar Icon**: Convenient transit button with a live route badge count for toggling the planner window anytime.
 - 🚌 **City-Wide Coverage**: Scans paved road networks across residential, commercial, and industrial districts to deliver complete transit accessibility.
 - 🛑 **Smart Roadside Bus Stop Placement**:
   - Dynamically places roadside bus stops safely along road spans outside of intersection conflict zones.
@@ -27,7 +34,7 @@ Available on Paradox Mods: **[Auto Bus Lines on Paradox Mods](https://mods.parad
   - Built-in "Repair Broken Bus Lines" tool detects broken paths (from bulldozing, road upgrades, or modifications), nudges problematic stops, and re-triggers game pathfinding.
 - ⚙️ **Comprehensive Mod Settings**:
   - Accessible via **Options > Mod Settings > Auto Bus Lines**.
-  - Configure bus stop density presets (Balanced, Dense, Ultra / Every Block, Low / Express, Custom), target stop spacing (60m–500m), minimum/maximum stops per line, maximum route length, custom/modded bus stop prefabs, and auto-generation on city save load.
+  - Configure Plan Mode toggle, open planner window, bus stop density presets (Balanced, Dense, Ultra / Every Block, Low / Express, Custom), target stop spacing (60m–500m), minimum/maximum stops per line, maximum route length, custom/modded bus stop prefabs, and auto-generation on city save load.
 
 ---
 

@@ -30,6 +30,7 @@ namespace AutoBusLines
             updateSystem.UpdateAt<RoadDepotAssigner>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAt<BusLineGenerator>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAt<RouteInspector>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateAt<AutoBusLinesUISystem>(SystemUpdatePhase.UIUpdate);
 
             log.Info("AutoBusLines loaded and settings registered to Options UI!");
         }

@@ -1,0 +1,56 @@
+.button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    width: 36px;
+    height: 36px;
+    border-radius: 4px;
+    background: rgba(24, 30, 40, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    color: #d1d8e0;
+    cursor: pointer;
+    margin: 2px 4px;
+    transition: all 0.15s ease-in-out;
+    padding: 0;
+
+    &:hover {
+        background: rgba(45, 55, 72, 0.95);
+        border-color: rgba(66, 153, 225, 0.8);
+        color: #ffffff;
+    }
+
+    &.active {
+        background: rgba(49, 130, 206, 0.85);
+        border-color: #63b3ed;
+        color: #ffffff;
+        box-shadow: 0 0 10px rgba(66, 153, 225, 0.6);
+    }
+
+    &.hasPlan {
+        border-color: #48bb78;
+    }
+}
+
+.icon {
+    display: block;
+    pointer-events: none;
+}
+
+.badge {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    background: #38a169;
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 700;
+    min-width: 17px;
+    height: 17px;
+    line-height: 17px;
+    text-align: center;
+    border-radius: 9px;
+    padding: 0 4px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.6);
+    pointer-events: none;
+}
