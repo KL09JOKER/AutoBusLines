@@ -25,10 +25,9 @@ project.nuget.cache
 auto-bus-lines-ui/node_modules/
 auto-bus-lines-ui/build/
 
-# ─── Paradox Mods publish config (machine-specific credentials/profiles) ────
-# PublishConfiguration.xml is intentionally KEPT in git (it holds description,
-# version, tags etc.). Only the local publish profiles with credentials are excluded.
-Properties/PublishProfiles/
+# ─── Paradox Mods publish config & thumbnails (local/machine-specific) ──────
+# Keep entirely off GitHub — contains credentials, thumbnails, publish profiles
+Properties/
 
 # ─── IDE & Editor ────────────────────────────────────────────────────────────
 .vs/
