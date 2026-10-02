@@ -18,7 +18,7 @@ namespace AutoBusLines
             if (GameManager.instance.modManager.TryGetExecutableAsset(this, out var asset))
                 log.Info($"Current mod asset at {asset.path}");
 
-            // Register visual settings in Options -> Mod Settings
+            // Load mod settings and register About, Version, and How to Use in Options -> Mod Settings
             setting = new Setting(this);
             setting.RegisterInOptionsUI();
             GameManager.instance.localizationManager.AddSource("en-US", new LocaleEN(setting));
@@ -30,6 +30,8 @@ namespace AutoBusLines
             updateSystem.UpdateAt<RoadDepotAssigner>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAt<BusLineGenerator>(SystemUpdatePhase.GameSimulation);
             updateSystem.UpdateAt<RouteInspector>(SystemUpdatePhase.GameSimulation);
+            updateSystem.UpdateAt<AutoBusLinesUISystem>(SystemUpdatePhase.UIUpdate);
+            updateSystem.UpdateAt<PlanRouteOverlaySystem>(SystemUpdatePhase.Rendering);
 
             log.Info("AutoBusLines loaded and settings registered to Options UI!");
         }

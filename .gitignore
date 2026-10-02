@@ -1,41 +1,63 @@
-# Build & Compilation outputs
+# ─── Build & Compilation outputs ────────────────────────────────────────────
 bin/
 obj/
 Library/
+Temp/
 *.suo
 *.user
 *.userosscache
 *.sln.docstates
 
-# Decompiled game code & internal reverse engineering references
+# ─── Game-referenced decompiled code (not for contributors) ─────────────────
 Reference/
 Inspector/
 
-# Scratch & Temporary files
-*.patch
-*.zip
-*.log
-*.tmp
-*.bak
-CLAUDE.md
-SESSION_SUMMARY.md
-skills-lock.json
-ui_plan.html
-create_object_il.txt
-decompiled_job.txt
-decompiled_setuppathfind.txt
+# ─── NuGet / MSBuild generated ──────────────────────────────────────────────
+*.nuget.dgspec.json
+*.nuget.g.props
+*.nuget.g.targets
+project.assets.json
+project.nuget.cache
 
-# IDE & Editor files
+# ─── UI: node_modules & compiled bundle output ──────────────────────────────
+# Source (src/, tsconfig, webpack.config.js, package.json) IS tracked
+# Only the compiled output bundle is excluded
+auto-bus-lines-ui/node_modules/
+auto-bus-lines-ui/build/
+
+# ─── Paradox Mods publish config (machine-specific credentials/profiles) ────
+# PublishConfiguration.xml is intentionally KEPT in git (it holds description,
+# version, tags etc.). Only the local publish profiles with credentials are excluded.
+Properties/PublishProfiles/
+
+# ─── IDE & Editor ────────────────────────────────────────────────────────────
 .vs/
 .idea/
 .vscode/
 *.swp
 *.swo
 
-# AI / Agent workspaces
+# ─── AI / Agent workspace files ─────────────────────────────────────────────
 .agents/
 .claude/
+AGENTS.md
+GEMINI.md
+CLAUDE.md
+SESSION_SUMMARY.md
+skills-lock.json
 
-# Paradox publishing config & profiles (local to machine)
-Properties/
-
+# ─── Scratch / Temp / Local-only files ──────────────────────────────────────
+*.patch
+*.zip
+*.log
+*.tmp
+*.bak
+ui_plan.html
+create_object_il.txt
+decompiled_job.txt
+decompiled_setuppathfind.txt
+workspace.xml
+encodings.xml
+indexLayout.xml
+projectSettingsUpdater.xml
+ilpp.pid

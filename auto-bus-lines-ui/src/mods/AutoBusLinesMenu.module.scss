@@ -1,0 +1,29 @@
+.container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.toolbarButton {
+  position: relative;
+  width: 38rem;
+  height: 38rem;
+}
+
+.badge {
+  position: absolute;
+  top: -3rem;
+  right: -3rem;
+  background-color: #3182ce;
+  color: #ffffff;
+  font-size: 10rem;
+  font-weight: 700;
+  border-radius: 9999px;
+  padding: 1rem 5rem;
+  line-height: 1.2;
+  box-shadow: 0 2rem 4rem rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}

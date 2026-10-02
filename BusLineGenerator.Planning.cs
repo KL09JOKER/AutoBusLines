@@ -407,6 +407,7 @@ namespace AutoBusLines
             int minStopsPerLine,
             int maxStopsPerLine,
             float maxRouteLength,
+            HashSet<Entity> alreadyCoveredStops,
             out HashSet<Entity> servedStopEntities)
         {
             var ctx = new PlanContext
@@ -417,6 +418,19 @@ namespace AutoBusLines
                 MaxStops = maxStopsPerLine,
                 MaxRouteLength = maxRouteLength
             };
+
+            // Pre-seed ctx.Served with already covered curbside stops
+            if (alreadyCoveredStops != null)
+            {
+                for (int i = 0; i < allGlobalStops.Count; i++)
+                {
+                    var st = allGlobalStops[i];
+                    if (!st.IsStationBay && alreadyCoveredStops.Contains(st.StopEntity))
+                    {
+                        ctx.Served.Add(st.StopEntity);
+                    }
+                }
+            }
 
             BuildDirectedRoadGraph(out ctx.NodeOutEdges, out ctx.NodePositions);
             IndexStopsByDirectedEdge(allGlobalStops, out ctx.EdgeForwardStops, out ctx.EdgeBackwardStops);
@@ -431,15 +445,25 @@ namespace AutoBusLines
             PlanResidualLoops(ctx);
             ConsolidateSmallTours(ctx);
 
-            // Fallback: no tours at all (tiny isolated town) -> one simple line
-            if (ctx.Tours.Count == 0 && allGlobalStops.Count >= 2)
+            // Fallback: only create fallback tour if there are actual unserved stops
+            int unservedCount = 0;
+            for (int i = 0; i < allGlobalStops.Count; i++)
             {
-                var fallbackTour = new List<PlacedStop>(allGlobalStops);
-                if (fallbackTour.Count > maxStopsPerLine)
-                    fallbackTour = SubsampleTour(fallbackTour, maxStopsPerLine);
-                ctx.Tours.Add(fallbackTour);
-                for (int t = 0; t < fallbackTour.Count; t++)
-                    ctx.Served.Add(fallbackTour[t].StopEntity);
+                if (!allGlobalStops[i].IsStationBay && !ctx.Served.Contains(allGlobalStops[i].StopEntity))
+                    unservedCount++;
+            }
+
+            if (ctx.Tours.Count == 0 && unservedCount >= 2)
+            {
+                var fallbackTour = allGlobalStops.FindAll(s => !s.IsStationBay && !ctx.Served.Contains(s.StopEntity));
+                if (fallbackTour.Count >= 2)
+                {
+                    if (fallbackTour.Count > maxStopsPerLine)
+                        fallbackTour = SubsampleTour(fallbackTour, maxStopsPerLine);
+                    ctx.Tours.Add(fallbackTour);
+                    for (int t = 0; t < fallbackTour.Count; t++)
+                        ctx.Served.Add(fallbackTour[t].StopEntity);
+                }
             }
 
             DiagnoseTours(ctx);
@@ -502,6 +526,27 @@ namespace AutoBusLines
             return count;
         }
 
+        // Count only the unserved stops along a corridor
+        private int CorridorUnservedStopCount(PlanContext ctx, RoadCorridor corr)
+        {
+            int count = 0;
+            for (int i = 0; i < corr.Segments.Count; i++)
+            {
+                var road = corr.Segments[i].RoadEntity;
+                if (ctx.EdgeForwardStops.TryGetValue(road, out var listFwd))
+                {
+                    for (int k = 0; k < listFwd.Count; k++)
+                        if (!ctx.Served.Contains(listFwd[k].StopEntity)) count++;
+                }
+                if (ctx.EdgeBackwardStops.TryGetValue(road, out var listRev))
+                {
+                    for (int k = 0; k < listRev.Count; k++)
+                        if (!ctx.Served.Contains(listRev[k].StopEntity)) count++;
+                }
+            }
+            return count;
+        }
+
         // Straight-line distance between two graph nodes; a lower bound on any drive between them.
         private float NodeDistance(PlanContext ctx, Entity a, Entity b)
         {
@@ -557,7 +602,9 @@ namespace AutoBusLines
                         Forward = forward,
                         RoadEntity = attachedRoad,
                         HubEntity = stationEntity,
-                        IsOutbound = true
+                        IsOutbound = true,
+                        IsStationBay = true,
+                        IsPreExisting = true
                     });
                 }
 
@@ -762,6 +809,10 @@ namespace AutoBusLines
                     if (stopCounts[i] + stopCounts[j] < minPairStops)
                         continue;
 
+                    // Skip pairing if both corridors are already fully served
+                    if (CorridorUnservedStopCount(ctx, corrA) == 0 && CorridorUnservedStopCount(ctx, corrB) == 0)
+                        continue;
+
                     float3 pStartB = GetCorridorEndpoint(corrB, true);
                     float3 pEndB = GetCorridorEndpoint(corrB, false);
                     float3 dirB = math.normalizesafe(new float3(pEndB.x - pStartB.x, 0f, pEndB.z - pStartB.z));
@@ -866,6 +917,10 @@ namespace AutoBusLines
 
                 var corr = corridors[i];
                 if (corr.TotalLength < 180.0f || corr.Segments.Count == 0)
+                    continue;
+
+                // Skip corridor if all its stops are already served
+                if (CorridorUnservedStopCount(ctx, corr) == 0)
                     continue;
 
                 // Never drive backwards on one-way streets

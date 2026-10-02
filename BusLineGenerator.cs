@@ -40,6 +40,7 @@ namespace AutoBusLines
         private const int ROUTES_PER_FRAME = 2;
         private int _currentTourIndex = 0;
         private List<List<PlacedStop>> _plannedTours = new List<List<PlacedStop>>();
+        private List<Color32> _plannedTourColors = new List<Color32>();
         private Entity _cachedBusLinePrefabEntity = Entity.Null;
         private RouteData _cachedBusLineRouteData;
         private int _totalStopsPlaced = 0;
@@ -53,6 +54,7 @@ namespace AutoBusLines
         private RoadNetworkScanner _roadScanner;
         private RoadDepotAssigner _roadAssigner;
         private PrefabSystem _prefabSystem;
+        private Game.UI.NameSystem _nameSystem;
 
         private EntityQuery _busStopPrefabQuery;
         private EntityQuery _busLinePrefabQuery;
@@ -81,7 +83,7 @@ namespace AutoBusLines
             public int SpanId;
         }
 
-        private struct PlacedStop
+        public struct PlacedStop
         {
             public Entity StopEntity;
             public float3 Position;
@@ -93,6 +95,10 @@ namespace AutoBusLines
             public float AngleFromHub;
             public float DistFromHub;
             public bool IsOutbound;
+            public float RoadT;
+            public Entity PrefabEntity;
+            public bool IsStationBay;
+            public bool IsPreExisting;
         }
 
         private class RoadSegmentChain
@@ -176,6 +182,7 @@ namespace AutoBusLines
             _roadScanner = World.GetOrCreateSystemManaged<RoadNetworkScanner>();
             _roadAssigner = World.GetOrCreateSystemManaged<RoadDepotAssigner>();
             _prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
+            _nameSystem = World.GetOrCreateSystemManaged<Game.UI.NameSystem>();
 
             _busStopPrefabQuery = GetEntityQuery(new EntityQueryDesc
             {
@@ -240,6 +247,263 @@ namespace AutoBusLines
         public void RequestRepair()
         {
             _isRepairRequested = true;
+        }
+
+        private List<PlannedRoute> _activePlan = null;
+        private int _currentPlanSeed = 0;
+        private bool _isPlanRequest = false;
+        private int _requestedSeed = 0;
+        private bool _isBuildPlanRequest = false;
+        private bool _isDiscardPlanRequest = false;
+
+        public void RequestPlan(int seedOffset = 0)
+        {
+            _requestedSeed = seedOffset;
+            _isPlanRequest = true;
+        }
+
+        public void RequestBuildSelectedPlan()
+        {
+            _isBuildPlanRequest = true;
+        }
+
+        public void RequestDiscardPlan()
+        {
+            _isDiscardPlanRequest = true;
+        }
+
+        public void ToggleRoute(int routeId, bool enabled)
+        {
+            if (_activePlan == null) return;
+            var route = _activePlan.Find(r => r.Id == routeId);
+            if (route != null)
+            {
+                route.Enabled = enabled;
+                AutoBusLinesUISystem.Instance?.UpdatePlan(_activePlan, _currentPlanSeed);
+            }
+        }
+
+        public void ToggleStop(int routeId, int stopIndex, bool enabled)
+        {
+            if (_activePlan == null) return;
+            var route = _activePlan.Find(r => r.Id == routeId);
+            if (route != null)
+            {
+                var stop = route.Stops.Find(s => s.Index == stopIndex);
+                if (stop != null)
+                {
+                    stop.Enabled = enabled;
+                    AutoBusLinesUISystem.Instance?.UpdatePlan(_activePlan, _currentPlanSeed);
+                }
+            }
+        }
+
+        public List<PlannedRoute> GetCurrentPlan() => _activePlan;
+        public bool HasActivePlan() => _activePlan != null && _activePlan.Count > 0;
+        public PlannedRoute GetActivePlannedRoute(int routeId) => _activePlan?.Find(r => r.Id == routeId);
+
+        // High-visibility, vibrant modern transit palette designed for crisp clarity on 3D terrain and UI
+        public static readonly string[] VibrantTransitColors = new string[]
+        {
+            "#007AFF", // Electric Metro Blue
+            "#FF5500", // Bright Safety Orange
+            "#00C853", // Vivid Emerald Green
+            "#9D00FF", // Neon Violet / Purple
+            "#FF0055", // Hot Raspberry / Crimson
+            "#00C4D6", // Electric Cyan / Aqua
+            "#FFB800", // Vivid Amber Gold
+            "#FF1493", // Deep Pink / Fuchsia
+            "#00E676", // Bright Spring Green
+            "#536DFE", // Royal Indigo Blue
+            "#FF3D00", // Flame Vermilion
+            "#00B0FF", // Vivid Sky Blue
+            "#AA00FF", // Bright Purple
+            "#76FF03", // Vivid Lime Green
+            "#FF6E40", // Vivid Tangerine
+            "#1DE9B6", // Turquoise Teal
+        };
+
+        // Curated anchor hues for station hubs, ensuring distinct, vibrant color families
+        private static readonly float[] s_StationAnchorHues = new float[]
+        {
+            0.58f, // Station 0: Electric Metro Blue
+            0.38f, // Station 1: Vivid Emerald Green
+            0.07f, // Station 2: Warm Tangelo Orange
+            0.76f, // Station 3: Electric Violet / Purple
+            0.98f, // Station 4: Bright Crimson Red
+            0.50f, // Station 5: Bright Cyan / Aqua
+            0.12f, // Station 6: Golden Amber
+            0.88f, // Station 7: Hot Pink / Fuchsia
+            0.24f, // Station 8: Vivid Lime Green
+            0.67f, // Station 9: Royal Indigo
+        };
+
+        public static string GetLineHexColor(int lineNumber)
+        {
+            if (lineNumber >= 1 && lineNumber <= VibrantTransitColors.Length)
+            {
+                return VibrantTransitColors[lineNumber - 1];
+            }
+            float lineHue = ((lineNumber - 1) * 0.618033988749895f) % 1.0f;
+            Color32 c = HSVToRGB(lineHue, 0.92f, 0.98f);
+            return $"#{c.r:X2}{c.g:X2}{c.b:X2}";
+        }
+
+        public static Color32 HexToColor(string hex)
+        {
+            if (string.IsNullOrEmpty(hex)) return new Color32(255, 0, 0, 255);
+            hex = hex.TrimStart('#');
+            if (hex.Length == 6 &&
+                byte.TryParse(hex.Substring(0, 2), System.Globalization.NumberStyles.HexNumber, null, out byte r) &&
+                byte.TryParse(hex.Substring(2, 2), System.Globalization.NumberStyles.HexNumber, null, out byte g) &&
+                byte.TryParse(hex.Substring(4, 2), System.Globalization.NumberStyles.HexNumber, null, out byte b))
+            {
+                return new Color32(r, g, b, 255);
+            }
+            return new Color32(255, 0, 0, 255);
+        }
+
+        public static List<string> ComputeTourColors(List<List<PlacedStop>> tours, LineColorMode mode)
+        {
+            var hexColors = new List<string>(tours.Count);
+
+            if (mode == LineColorMode.Random)
+            {
+                for (int t = 0; t < tours.Count; t++)
+                {
+                    if (t < VibrantTransitColors.Length)
+                    {
+                        hexColors.Add(VibrantTransitColors[t]);
+                    }
+                    else
+                    {
+                        float lineHue = ((t * 0.618033988749895f) % 1.0f);
+                        Color32 c = HSVToRGB(lineHue, 0.92f, 0.98f);
+                        hexColors.Add($"#{c.r:X2}{c.g:X2}{c.b:X2}");
+                    }
+                }
+                return hexColors;
+            }
+
+            // Per Station / Hub Mode:
+            // 1. Routes connecting to an actual bus station or terminal share that station's color family.
+            // 2. Regular street lines without a station hub are treated independently with unique vibrant transit colors.
+            var hubToTours = new Dictionary<Entity, List<int>>();
+            var distinctHubs = new List<Entity>();
+            var nonHubTours = new List<int>();
+
+            for (int t = 0; t < tours.Count; t++)
+            {
+                var tour = tours[t];
+                Entity hub = Entity.Null;
+                // Priority 1: Station platform bay
+                for (int s = 0; s < tour.Count; s++)
+                {
+                    if (tour[s].IsStationBay && tour[s].HubEntity != Entity.Null)
+                    {
+                        hub = tour[s].HubEntity;
+                        break;
+                    }
+                }
+                // Priority 2: Any stop with HubEntity
+                if (hub == Entity.Null)
+                {
+                    for (int s = 0; s < tour.Count; s++)
+                    {
+                        if (tour[s].HubEntity != Entity.Null)
+                        {
+                            hub = tour[s].HubEntity;
+                            break;
+                        }
+                    }
+                }
+
+                if (hub != Entity.Null)
+                {
+                    if (!hubToTours.TryGetValue(hub, out var list))
+                    {
+                        list = new List<int>();
+                        hubToTours[hub] = list;
+                        distinctHubs.Add(hub);
+                    }
+                    list.Add(t);
+                }
+                else
+                {
+                    nonHubTours.Add(t);
+                }
+            }
+
+            var tourColors = new string[tours.Count];
+
+            // Assign cohesive, vibrant palettes to station hubs
+            for (int h = 0; h < distinctHubs.Count; h++)
+            {
+                Entity hub = distinctHubs[h];
+                var tourIndices = hubToTours[hub];
+                int countInHub = tourIndices.Count;
+
+                float hubBaseHue = s_StationAnchorHues[h % s_StationAnchorHues.Length];
+                if (h >= s_StationAnchorHues.Length)
+                {
+                    hubBaseHue = (hubBaseHue + 0.618033988749895f * (h / s_StationAnchorHues.Length)) % 1.0f;
+                }
+
+                for (int k = 0; k < countInHub; k++)
+                {
+                    int tourIdx = tourIndices[k];
+                    float hueOffset = 0f;
+                    if (countInHub > 1)
+                    {
+                        float spread = math.min(0.12f, 0.035f * (countInHub - 1));
+                        float tNorm = (float)k / (countInHub - 1);
+                        hueOffset = (tNorm - 0.5f) * spread;
+                    }
+
+                    float lineHue = (hubBaseHue + hueOffset + 1.0f) % 1.0f;
+                    // Maintain high saturation (0.88 - 0.96) and brightness (0.96 - 1.0) so lines never look dull
+                    float saturation = (k % 2 == 0) ? 0.96f : 0.88f;
+                    float value = ((k / 2) % 2 == 0) ? 1.0f : 0.96f;
+
+                    Color32 c = HSVToRGB(lineHue, saturation, value);
+                    tourColors[tourIdx] = $"#{c.r:X2}{c.g:X2}{c.b:X2}";
+                }
+            }
+
+            // Assign distinct, punchy transit colors to street lines without a central station hub
+            int colorOffset = distinctHubs.Count;
+            for (int i = 0; i < nonHubTours.Count; i++)
+            {
+                int tourIdx = nonHubTours[i];
+                int paletteIdx = colorOffset + i;
+                if (paletteIdx < VibrantTransitColors.Length)
+                {
+                    tourColors[tourIdx] = VibrantTransitColors[paletteIdx];
+                }
+                else
+                {
+                    float lineHue = ((paletteIdx * 0.618033988749895f) % 1.0f);
+                    Color32 c = HSVToRGB(lineHue, 0.92f, 0.98f);
+                    tourColors[tourIdx] = $"#{c.r:X2}{c.g:X2}{c.b:X2}";
+                }
+            }
+
+            hexColors.AddRange(tourColors);
+            return hexColors;
+        }
+
+        public void UpdatePlanColors(LineColorMode mode)
+        {
+            if (_activePlan == null || _activePlan.Count == 0 || _plannedTours == null || _plannedTours.Count == 0)
+                return;
+
+            var tourColors = ComputeTourColors(_plannedTours, mode);
+            for (int i = 0; i < _activePlan.Count && i < tourColors.Count; i++)
+            {
+                _activePlan[i].Color = tourColors[i];
+            }
+
+            AutoBusLinesUISystem.Instance?.UpdatePlan(_activePlan, _currentPlanSeed);
         }
 
         public void DeleteAllBusLinesAndStops()
@@ -421,6 +685,73 @@ namespace AutoBusLines
                 depotFinder.Reset();
 
             log.Info($"Deleted {lineCount} bus lines (with {waypointCount} waypoints and {segmentCount} segments) and {stopCount} roadside bus stops across the city.");
+        }
+
+        /// <summary>
+        /// Scans all active bus transit lines in the city and returns the set of all stop entities
+        /// that are currently served by at least one valid, active bus route.
+        /// </summary>
+        private HashSet<Entity> GetStopsCoveredByActiveBusLines(out int activeLineCount)
+        {
+            var coveredStops = new HashSet<Entity>();
+            activeLineCount = 0;
+
+            var lineQuery = GetEntityQuery(
+                ComponentType.ReadOnly<Game.Routes.TransportLine>(),
+                ComponentType.ReadOnly<Game.Routes.Route>(),
+                ComponentType.Exclude<Deleted>()
+            );
+
+            if (lineQuery.IsEmptyIgnoreFilter)
+                return coveredStops;
+
+            using (var routeEntities = lineQuery.ToEntityArray(Allocator.Temp))
+            {
+                for (int r = 0; r < routeEntities.Length; r++)
+                {
+                    var routeEntity = routeEntities[r];
+                    if (!EntityManager.Exists(routeEntity) || EntityManager.HasComponent<Deleted>(routeEntity))
+                        continue;
+
+                    if (!EntityManager.HasComponent<PrefabRef>(routeEntity))
+                        continue;
+
+                    var prefabEntity = EntityManager.GetComponentData<PrefabRef>(routeEntity).m_Prefab;
+                    if (!EntityManager.HasComponent<TransportLineData>(prefabEntity))
+                        continue;
+
+                    var lineData = EntityManager.GetComponentData<TransportLineData>(prefabEntity);
+                    if (lineData.m_TransportType != TransportType.Bus)
+                        continue;
+
+                    if (!EntityManager.HasBuffer<RouteWaypoint>(routeEntity))
+                        continue;
+
+                    var waypoints = EntityManager.GetBuffer<RouteWaypoint>(routeEntity);
+                    if (waypoints.Length < 2)
+                        continue;
+
+                    activeLineCount++;
+
+                    for (int w = 0; w < waypoints.Length; w++)
+                    {
+                        var wpEntity = waypoints[w].m_Waypoint;
+                        if (!EntityManager.Exists(wpEntity) || EntityManager.HasComponent<Deleted>(wpEntity))
+                            continue;
+
+                        if (EntityManager.HasComponent<Game.Routes.Connected>(wpEntity))
+                        {
+                            var stopEntity = EntityManager.GetComponentData<Game.Routes.Connected>(wpEntity).m_Connected;
+                            if (EntityManager.Exists(stopEntity) && !EntityManager.HasComponent<Deleted>(stopEntity))
+                            {
+                                coveredStops.Add(stopEntity);
+                            }
+                        }
+                    }
+                }
+            }
+
+            return coveredStops;
         }
 
         private void ExecuteRepairBrokenRoutes()
@@ -890,7 +1221,10 @@ namespace AutoBusLines
                     {
                         int lineNumber = _currentTourIndex + 1;
                         float routeDistanceKm = CalculateTourLength(tour) / 1000f;
-                        CreateBusLine(_cachedBusLinePrefabEntity, _cachedBusLineRouteData, tour, lineNumber, 0, _currentTourIndex);
+                        Color32? tourColor = (_plannedTourColors != null && _currentTourIndex < _plannedTourColors.Count)
+                            ? _plannedTourColors[_currentTourIndex]
+                            : (Color32?)null;
+                        CreateBusLine(_cachedBusLinePrefabEntity, _cachedBusLineRouteData, tour, lineNumber, 0, _currentTourIndex, tourColor);
                         log.Info($"Stage 3: Created Bus Line #{lineNumber} with {tour.Count} stops (Est. Length: {routeDistanceKm:F1} km) [Progress: {_currentTourIndex + 1}/{_plannedTours.Count}]");
                     }
                     _currentTourIndex++;
@@ -899,11 +1233,15 @@ namespace AutoBusLines
 
                 if (_currentTourIndex >= _plannedTours.Count)
                 {
-                    log.Info($"=== Generation Complete: Automatically created {_plannedTours.Count} bus lines covering 100% of all city roads & neighborhoods ({_totalStopsActive}/{_totalStopsPlaced} stops active across staged simulation frames). ===");
+                    int lineCount = _plannedTours.Count;
+                    log.Info($"=== Generation Complete: Automatically created {lineCount} bus lines covering 100% of all city roads & neighborhoods ({_totalStopsActive}/{_totalStopsPlaced} stops active across staged simulation frames). ===");
                     _generationStage = GenerationStage.Idle;
                     _hasRun = true;
                     _isManualRequest = false;
                     _plannedTours.Clear();
+
+                    AutoBusLinesUISystem.Instance?.UpdatePlan(null, 0, $"Successfully built {lineCount} bus lines!");
+                    AutoBusLinesUISystem.Instance?.SetPlanStatus("idle", $"Successfully built {lineCount} bus lines!");
 
                     // Trigger RouteInspector to inspect newly created routes once pathfinding settles
                     var inspector = World.GetExistingSystemManaged<RouteInspector>();
@@ -915,25 +1253,176 @@ namespace AutoBusLines
                 return;
             }
 
+            if (_isDiscardPlanRequest)
+            {
+                _isDiscardPlanRequest = false;
+                _activePlan = null;
+                _currentPlanSeed = 0;
+                AutoBusLinesUISystem.Instance?.UpdatePlan(null, 0, "Transit plan discarded.");
+                return;
+            }
+
+            if (_isBuildPlanRequest)
+            {
+                _isBuildPlanRequest = false;
+                ExecuteBuildSelectedPlan();
+                return;
+            }
+
+            if (_isPlanRequest)
+            {
+                _isPlanRequest = false;
+                ExecuteGeneration(planOnly: true, seedOffset: _requestedSeed, autoOpenPanel: true);
+                return;
+            }
+
             if (_hasRun)
                 return;
 
-            if (Mod.setting != null && !Mod.setting.AutoGenerateOnLoad && !_isManualRequest)
+            // Automatic generation on city load is disabled.
+            // Bus line generation only executes when manually requested by the user from the UI.
+            if (!_isManualRequest)
                 return;
 
+            if (Mod.setting != null && Mod.setting.EnablePlanMode)
+            {
+                _hasRun = true;
+                _isManualRequest = false;
+                ExecuteGeneration(planOnly: true, seedOffset: 0, autoOpenPanel: false);
+                return;
+            }
+
+            ExecuteGeneration(planOnly: false, seedOffset: 0, autoOpenPanel: false);
+        }
+
+        private void ExecuteBuildSelectedPlan()
+        {
+            if (_activePlan == null || _activePlan.Count == 0)
+            {
+                log.Warn("ExecuteBuildSelectedPlan: No active transit plan to build.");
+                AutoBusLinesUISystem.Instance?.SetPlanStatus("idle", "No active transit plan to build.");
+                return;
+            }
+
+            if (!FindBusLinePrefab(out Entity busLinePrefabEntity, out RouteData busLineRouteData))
+            {
+                log.Error("Could not find a valid Bus Line Prefab with RouteData archetypes!");
+                AutoBusLinesUISystem.Instance?.SetPlanStatus("idle", "Error: Bus line prefab not found.");
+                return;
+            }
+
+            var virtualToRealEntityMap = new Dictionary<int, Entity>();
+            var toursToBuild = new List<List<PlacedStop>>();
+            int totalNewStopsBuilt = 0;
+
+            for (int r = 0; r < _activePlan.Count; r++)
+            {
+                var route = _activePlan[r];
+                if (!route.Enabled)
+                    continue;
+
+                var enabledStops = route.Stops.FindAll(s => s.Enabled);
+                if (enabledStops.Count < 3)
+                {
+                    log.Warn($"Skipping Line #{route.Id}: only {enabledStops.Count} stops enabled (minimum 3 required).");
+                    continue;
+                }
+
+                var tourStops = new List<PlacedStop>();
+                for (int sIdx = 0; sIdx < enabledStops.Count; sIdx++)
+                {
+                    var stopData = enabledStops[sIdx];
+                    var st = stopData.InternalStop;
+
+                    if (st.StopEntity.Index < 0)
+                    {
+                        // Virtual stop that needs to be created in ECS
+                        if (!virtualToRealEntityMap.TryGetValue(st.StopEntity.Index, out Entity realStopEntity))
+                        {
+                            if (TryCreateBusStopEntity(st.RoadEntity, st.RoadT, st.Position, st.Forward, st.HubEntity,
+                                                       st.CorridorIndex, st.SpanOrderInCorridor, st.IsOutbound,
+                                                       st.PrefabEntity, out PlacedStop realPlacedStop))
+                            {
+                                realStopEntity = realPlacedStop.StopEntity;
+                                virtualToRealEntityMap[st.StopEntity.Index] = realStopEntity;
+                                st.StopEntity = realStopEntity;
+                                totalNewStopsBuilt++;
+
+                                if (!string.IsNullOrEmpty(stopData.Name))
+                                {
+                                    if (_nameSystem == null)
+                                        _nameSystem = World.GetOrCreateSystemManaged<Game.UI.NameSystem>();
+                                    _nameSystem?.SetCustomName(realStopEntity, stopData.Name);
+                                }
+                            }
+                            else
+                            {
+                                log.Error($"Failed to instantiate bus stop on road {st.RoadEntity.Index} for route #{route.Id}.");
+                                continue;
+                            }
+                        }
+                        else
+                        {
+                            st.StopEntity = realStopEntity;
+                        }
+                    }
+                    tourStops.Add(st);
+                }
+
+                if (tourStops.Count >= 3)
+                {
+                    toursToBuild.Add(tourStops);
+                }
+            }
+
+            if (toursToBuild.Count == 0)
+            {
+                log.Warn("No valid bus lines remained after filtering disabled stops and routes.");
+                AutoBusLinesUISystem.Instance?.SetPlanStatus("idle", "No valid bus lines remained to build.");
+                return;
+            }
+
+            log.Info($"Building Selected Plan: Instantiating {toursToBuild.Count} bus lines with {totalNewStopsBuilt} newly created bus stops in ECS...");
+
+            _plannedTours = toursToBuild;
+            _plannedTourColors = new List<Color32>();
+            for (int r = 0; r < _activePlan.Count; r++)
+            {
+                var route = _activePlan[r];
+                if (route.Enabled && route.Stops.FindAll(s => s.Enabled).Count >= 3)
+                {
+                    _plannedTourColors.Add(HexToColor(route.Color));
+                }
+            }
+            _cachedBusLinePrefabEntity = busLinePrefabEntity;
+            _cachedBusLineRouteData = busLineRouteData;
+            _totalStopsPlaced = totalNewStopsBuilt;
+            _totalStopsActive = totalNewStopsBuilt;
+            _currentTourIndex = 0;
+            _waitFrameCounter = 0;
+            _activePlan = null;
+            _currentPlanSeed = 0;
+
+            _generationStage = GenerationStage.WaitingForStopIndexing;
+            AutoBusLinesUISystem.Instance?.SetPlanStatus("building", $"Building {toursToBuild.Count} selected bus lines in city...");
+        }
+
+        private void ExecuteGeneration(bool planOnly, int seedOffset, bool autoOpenPanel)
+        {
             var roadToHub = _roadAssigner.GetRoadToDepotMap();
             if (_depotFinder.AllHubs.Length == 0 ||
                 _roadScanner.RoadSegments.Length == 0 ||
                 roadToHub.Count == 0)
                 return;
 
-            log.Info($"=== Starting AutoBusLines Generation: Global Unified 1-Stop-Per-Block with Multi-Hub Stop Sharing ===");
+            log.Info($"=== Starting AutoBusLines {(planOnly ? "Plan Mode Preview" : "Direct Generation")} (Variant #{seedOffset + 1}) ===");
 
             if (!FindBusStopPrefabs(out List<Entity> candidatePrefabs, out Entity defaultPrefab))
             {
                 log.Error("Could not find any valid Bus Stop Prefabs with ObjectData archetype!");
                 _hasRun = true;
                 _isManualRequest = false;
+                AutoBusLinesUISystem.Instance?.SetPlanStatus("idle", "Error: No bus stop prefabs found.");
                 return;
             }
 
@@ -942,12 +1431,13 @@ namespace AutoBusLines
                 log.Error("Could not find a valid Bus Line Prefab with RouteData archetypes!");
                 _hasRun = true;
                 _isManualRequest = false;
+                AutoBusLinesUISystem.Instance?.SetPlanStatus("idle", "Error: Bus line prefab not found.");
                 return;
             }
 
             log.Info($"Found {candidatePrefabs.Count} Bus Stop Candidate Prefabs and Bus Line Prefab {busLinePrefabEntity.Index}");
 
-            var rng = new Unity.Mathematics.Random(185392u);
+            var rng = new Unity.Mathematics.Random(185392u + (uint)(seedOffset * 7919));
 
             // Build exclusion zones around Bus Stations, Depots, and existing Platform Stops
             var exclusionPositions = new List<float3>();
@@ -1053,7 +1543,9 @@ namespace AutoBusLines
                     Position = stopPos,
                     Forward = stopForward,
                     RoadEntity = attachedRoad,
-                    HubEntity = nearestHub
+                    HubEntity = nearestHub,
+                    IsPreExisting = true,
+                    IsStationBay = false
                 };
 
                 allExistingStops.Add(placed);
@@ -1093,6 +1585,19 @@ namespace AutoBusLines
 
             var allCorridors = BuildCorridors();
             allCorridors.Sort((a, b) => b.TotalLength.CompareTo(a.TotalLength));
+
+            if (seedOffset > 0)
+            {
+                // Deterministic shuffle with seedOffset to produce alternative corridor pairings and route loops
+                var prng = new System.Random(seedOffset * 1013);
+                for (int i = allCorridors.Count - 1; i > 0; i--)
+                {
+                    int j = prng.Next(i + 1);
+                    var temp = allCorridors[i];
+                    allCorridors[i] = allCorridors[j];
+                    allCorridors[j] = temp;
+                }
+            }
 
             // -------------------------------------------------------------
             // STEP 2: Place Bus Stops Across ALL City Blocks & Neighborhoods
@@ -1222,7 +1727,7 @@ namespace AutoBusLines
                     if (TryPlaceAlternatingKerbStop(span, roadEdge, edgeT, roadPos, forwardTan,
                                                     order,
                                                     committedStops, candidatePrefabs, ref rng,
-                                                    minCollisionSpacing, out PlacedStop placedStop))
+                                                    minCollisionSpacing, planOnly, allGlobalStops.Count, out PlacedStop placedStop))
                     {
                         allGlobalStops.Add(placedStop);
                         totalStopsPlaced++;
@@ -1233,12 +1738,39 @@ namespace AutoBusLines
             log.Info($"Step 2 Complete: {allGlobalStops.Count} total stops available across the city ({totalStopsPlaced} newly placed, {existingStopsReused} existing reused) with target spacing {targetSpacing:F0}m.");
 
             // -------------------------------------------------------------
+            // Coverage & Active Routes Verification
+            // Prevent generating duplicate lines if roads and stops already have active service.
+            // -------------------------------------------------------------
+            var alreadyCoveredStops = GetStopsCoveredByActiveBusLines(out int activeBusLinesInCity);
+            log.Info($"Coverage Check: Discovered {activeBusLinesInCity} active bus lines currently serving {alreadyCoveredStops.Count} stops in the city.");
+
+            int unservedStopCount = 0;
+            for (int i = 0; i < allGlobalStops.Count; i++)
+            {
+                if (!allGlobalStops[i].IsStationBay && !alreadyCoveredStops.Contains(allGlobalStops[i].StopEntity))
+                {
+                    unservedStopCount++;
+                }
+            }
+
+            if (activeBusLinesInCity > 0 && unservedStopCount == 0)
+            {
+                log.Info($"ExecuteGeneration: All {allGlobalStops.Count} stops are already covered by {activeBusLinesInCity} active bus lines. Skipping duplicate line generation.");
+                _generationStage = GenerationStage.Idle;
+                _hasRun = true;
+                _isManualRequest = false;
+                string statusMsg = $"City transit network is already fully covered by {activeBusLinesInCity} active bus lines ({alreadyCoveredStops.Count} stops served). Use 'Delete All' if you wish to redesign from scratch.";
+                AutoBusLinesUISystem.Instance?.SetPlanStatus("idle", statusMsg);
+                return;
+            }
+
+            // -------------------------------------------------------------
             // STEP 3: Plan the bus loops (see BusLineGenerator.Planning.cs)
             // Builds validated closed cycles of legal, connected road edges: one-way directions are
             // respected, hairpin U-turns are only used at dead ends, and every loop stays within
             // maxRouteLength.
             // -------------------------------------------------------------
-            var allTours = PlanTours(allGlobalStops, allCorridors, minStopsPerLine, maxStopsPerLine, maxRouteLength, out var servedStopEntities);
+            var allTours = PlanTours(allGlobalStops, allCorridors, minStopsPerLine, maxStopsPerLine, maxRouteLength, alreadyCoveredStops, out var servedStopEntities);
 
             // Ensure any station platform bays included in planned tours are present in allGlobalStops for accurate tracking
             for (int t = 0; t < allTours.Count; t++)
@@ -1264,15 +1796,128 @@ namespace AutoBusLines
 
             if (allTours.Count == 0)
             {
-                log.Warn("No bus tours could be formed from the road network.");
+                log.Warn("No new bus tours needed or could be formed from the road network.");
                 _generationStage = GenerationStage.Idle;
                 _hasRun = true;
                 _isManualRequest = false;
+                string msg = activeBusLinesInCity > 0
+                    ? $"All road corridors and stops are already covered by {activeBusLinesInCity} active bus lines."
+                    : "No valid bus tours could be formed from the road network.";
+                AutoBusLinesUISystem.Instance?.SetPlanStatus("idle", msg);
+                return;
+            }
+
+            if (planOnly)
+            {
+                _plannedTours = new List<List<PlacedStop>>(allTours);
+                LineColorMode colorMode = Mod.setting != null ? Mod.setting.LineColoring : LineColorMode.PerStation;
+                var tourColors = ComputeTourColors(allTours, colorMode);
+
+                var plannedRoutes = new List<PlannedRoute>();
+                for (int t = 0; t < allTours.Count; t++)
+                {
+                    var tour = allTours[t];
+                    if (tour.Count < 3) continue;
+
+                    int lineNumber = t + 1;
+                    float routeDistKm = CalculateTourLength(tour) / 1000f;
+                    string hexColor = (t < tourColors.Count) ? tourColors[t] : GetLineHexColor(lineNumber);
+
+                    var routeData = new PlannedRoute
+                    {
+                        Id = lineNumber,
+                        Name = $"Line {lineNumber}",
+                        Color = hexColor,
+                        LengthKm = (float)Math.Round(routeDistKm, 1),
+                        Enabled = true
+                    };
+
+                    // First pass: collect street names and count occurrences on this tour
+                    var stopStreetNames = new string[tour.Count];
+                    var streetCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+                    for (int s = 0; s < tour.Count; s++)
+                    {
+                        var st = tour[s];
+                        if (!st.IsStationBay)
+                        {
+                            string street = GetRoadStreetName(st.RoadEntity) ?? "Road";
+                            stopStreetNames[s] = street;
+                            streetCounts[street] = streetCounts.TryGetValue(street, out int c) ? c + 1 : 1;
+                        }
+                    }
+
+                    // Second pass: assign formatted names with incremental numbering if duplicated
+                    var streetIndices = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+                    for (int s = 0; s < tour.Count; s++)
+                    {
+                        var st = tour[s];
+                        string stopDesc;
+
+                        if (st.IsStationBay)
+                        {
+                            stopDesc = "Station Bay";
+                        }
+                        else
+                        {
+                            string street = stopStreetNames[s] ?? "Road";
+                            int totalOnStreet = streetCounts[street];
+                            int currentIndex = streetIndices.TryGetValue(street, out int cur) ? cur + 1 : 1;
+                            streetIndices[street] = currentIndex;
+
+                            string prefix = st.IsPreExisting ? "Stop" : "New Stop";
+                            if (totalOnStreet > 1)
+                            {
+                                stopDesc = $"{prefix} {street} {currentIndex}";
+                            }
+                            else
+                            {
+                                stopDesc = $"{prefix} {street}";
+                            }
+                        }
+
+                        routeData.Stops.Add(new PlannedStopData
+                        {
+                            Index = s + 1,
+                            VirtualId = st.StopEntity.Index,
+                            Name = stopDesc,
+                            PosX = (float)Math.Round(st.Position.x, 1),
+                            PosY = (float)Math.Round(st.Position.y, 1),
+                            PosZ = (float)Math.Round(st.Position.z, 1),
+                            IsStationBay = st.IsStationBay,
+                            IsPreExisting = st.IsPreExisting,
+                            Enabled = true,
+                            InternalStop = st
+                        });
+                    }
+                    plannedRoutes.Add(routeData);
+                }
+
+                _activePlan = plannedRoutes;
+                _currentPlanSeed = seedOffset;
+                _generationStage = GenerationStage.Idle;
+                _hasRun = true;
+                _isManualRequest = false;
+
+                log.Info($"Plan Mode: Successfully generated {plannedRoutes.Count} proposed lines with {servedStopEntities.Count} stops (Variant #{seedOffset + 1}).");
+                AutoBusLinesUISystem.Instance?.UpdatePlan(plannedRoutes, seedOffset, $"Preview Plan Ready: {plannedRoutes.Count} lines proposed ({servedStopEntities.Count} stops).");
+                if (autoOpenPanel)
+                {
+                    AutoBusLinesUISystem.Instance?.OpenPanel();
+                }
                 return;
             }
 
             // Stage 1 Completion: Store planned tours and prefab info for staged execution across subsequent frames
             _plannedTours = new List<List<PlacedStop>>(allTours);
+            LineColorMode directColorMode = Mod.setting != null ? Mod.setting.LineColoring : LineColorMode.PerStation;
+            var directTourColors = ComputeTourColors(allTours, directColorMode);
+            _plannedTourColors = new List<Color32>();
+            for (int i = 0; i < directTourColors.Count; i++)
+            {
+                _plannedTourColors.Add(HexToColor(directTourColors[i]));
+            }
             _cachedBusLinePrefabEntity = busLinePrefabEntity;
             _cachedBusLineRouteData = busLineRouteData;
             _totalStopsPlaced = allGlobalStops.Count;
@@ -1282,6 +1927,63 @@ namespace AutoBusLines
 
             log.Info($"Stage 1 Complete: Placed {_totalStopsPlaced} roadside bus stops and planned {_plannedTours.Count} bus lines. Yielding {INDEXING_DELAY_FRAMES} simulation frames for spatial quadtrees and net indexing to settle before drawing routes...");
             return;
+        }
+
+        public string GetRoadStreetName(Entity roadEntity)
+        {
+            if (roadEntity == Entity.Null || !EntityManager.Exists(roadEntity))
+                return null;
+
+            if (_nameSystem == null)
+            {
+                _nameSystem = World.GetOrCreateSystemManaged<Game.UI.NameSystem>();
+            }
+
+            try
+            {
+                // 1. Try to get the road's aggregate entity (where CS2 stores street names)
+                if (EntityManager.HasComponent<Game.Net.Aggregated>(roadEntity))
+                {
+                    var agg = EntityManager.GetComponentData<Game.Net.Aggregated>(roadEntity);
+                    if (agg.m_Aggregate != Entity.Null && EntityManager.Exists(agg.m_Aggregate))
+                    {
+                        string aggName = _nameSystem?.GetRenderedLabelName(agg.m_Aggregate);
+                        if (IsValidStreetName(aggName))
+                            return aggName.Trim();
+                    }
+                }
+
+                // 2. Try directly on the road entity
+                string directName = _nameSystem?.GetRenderedLabelName(roadEntity);
+                if (IsValidStreetName(directName))
+                    return directName.Trim();
+
+                // 3. Fallback to BuildingUtils.GetAddress
+                if (Game.Buildings.BuildingUtils.GetAddress(EntityManager, Entity.Null, roadEntity, 0.5f, out Entity addressRoad, out _))
+                {
+                    if (addressRoad != Entity.Null && EntityManager.Exists(addressRoad))
+                    {
+                        string addrName = _nameSystem?.GetRenderedLabelName(addressRoad);
+                        if (IsValidStreetName(addrName))
+                            return addrName.Trim();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                log.Warn($"GetRoadStreetName failed for road entity {roadEntity.Index}: {ex.Message}");
+            }
+
+            return null;
+        }
+
+        private static bool IsValidStreetName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                return false;
+            if (name.StartsWith("Assets.") || name.StartsWith("Roads.") || name.StartsWith("SubServices.") || name.StartsWith("Common."))
+                return false;
+            return true;
         }
 
         private bool TryFindExistingStopOnSpan(BlockSpan span,
@@ -1461,6 +2163,8 @@ namespace AutoBusLines
                                                  List<Entity> candidatePrefabs,
                                                  ref Unity.Mathematics.Random rng,
                                                  float minSpacingCap,
+                                                 bool planOnly,
+                                                 int currentGlobalStopCount,
                                                  out PlacedStop placedStop)
         {
             placedStop = default;
@@ -1565,8 +2269,31 @@ namespace AutoBusLines
                 selectedPrefab = candidatePrefabs[randIdx];
             }
 
-            if (!TryCreateBusStopEntity(roadEntity, t, stopPos, forward, span.HubEntity, span.CorridorIndex, spanOrderInCorridor, isOutbound, selectedPrefab, out placedStop))
-                return false;
+            if (planOnly)
+            {
+                placedStop = new PlacedStop
+                {
+                    StopEntity = new Entity { Index = -(currentGlobalStopCount + 1), Version = 1 },
+                    Position = stopPos,
+                    Forward = forward,
+                    RoadEntity = roadEntity,
+                    HubEntity = span.HubEntity,
+                    CorridorIndex = span.CorridorIndex,
+                    SpanOrderInCorridor = spanOrderInCorridor,
+                    AngleFromHub = 0f,
+                    DistFromHub = 0f,
+                    IsOutbound = isOutbound,
+                    RoadT = t,
+                    PrefabEntity = selectedPrefab,
+                    IsStationBay = false,
+                    IsPreExisting = false
+                };
+            }
+            else
+            {
+                if (!TryCreateBusStopEntity(roadEntity, t, stopPos, forward, span.HubEntity, span.CorridorIndex, spanOrderInCorridor, isOutbound, selectedPrefab, out placedStop))
+                    return false;
+            }
 
             committedStops.Add(new CommittedStopInfo
             {
@@ -1684,7 +2411,11 @@ namespace AutoBusLines
                 SpanOrderInCorridor = spanOrderInCorridor,
                 AngleFromHub = 0f,
                 DistFromHub = 0f,
-                IsOutbound = isOutbound
+                IsOutbound = isOutbound,
+                RoadT = t,
+                PrefabEntity = busStopPrefabEntity,
+                IsStationBay = false,
+                IsPreExisting = false
             };
             return true;
         }
@@ -2452,6 +3183,21 @@ namespace AutoBusLines
             return "";
         }
 
+        private string GetPrefabIcon(Entity e)
+        {
+            if (_prefabSystem != null)
+            {
+                if (_prefabSystem.TryGetPrefab<PrefabBase>(e, out var pBase) && pBase != null)
+                {
+                    if (pBase.TryGet<UIObject>(out var uiObj) && uiObj != null && !string.IsNullOrEmpty(uiObj.m_Icon))
+                    {
+                        return uiObj.m_Icon;
+                    }
+                }
+            }
+            return "Media/Game/Icons/BusStop.svg";
+        }
+
         private bool FindBusStopPrefabs(out List<Entity> candidatePrefabs, out Entity defaultPrefab)
         {
             candidatePrefabs = new List<Entity>();
@@ -2483,7 +3229,11 @@ namespace AutoBusLines
 
                     if (pName.IndexOf("Outside Connection", StringComparison.OrdinalIgnoreCase) >= 0 ||
                         pName.IndexOf("OutsideConnection", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                        pName.IndexOf("Placeholder", StringComparison.OrdinalIgnoreCase) >= 0)
+                        pName.IndexOf("Placeholder", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        pName.IndexOf("Integrated", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        pName.IndexOf("Platform", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        pName.IndexOf("Subway", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        pName.IndexOf("Train", StringComparison.OrdinalIgnoreCase) >= 0)
                     {
                         continue;
                     }
@@ -2492,6 +3242,9 @@ namespace AutoBusLines
 
                     if (!discovered.Contains(pName))
                         discovered.Add(pName);
+
+                    string pIcon = GetPrefabIcon(e);
+                    Setting.DiscoveredStopPrefabIcons[pName] = pIcon;
 
                     if (!nameToEntity.ContainsKey(pName))
                     {
@@ -2527,6 +3280,7 @@ namespace AutoBusLines
                     Setting.DiscoveredStopPrefabNames.Clear();
                     Setting.DiscoveredStopPrefabNames.AddRange(discovered);
                     Setting.DiscoveredStopPrefabVersion++;
+                    AutoBusLinesUISystem.Instance?.UpdateStopPrefabOptions();
                     log.Info($"Discovered {discovered.Count} exact Bus Stop Prefab models in the game: {string.Join(", ", discovered)}");
                 }
             }
@@ -2547,6 +3301,12 @@ namespace AutoBusLines
             }
             else
             {
+                // Fallback if previous model was removed or invalid (e.g. Integrated Bus Stop)
+                if (Mod.setting != null)
+                {
+                    Mod.setting.SelectedStopPrefab = "All";
+                    Mod.setting.Apply();
+                }
                 candidatePrefabs.AddRange(allValidPrefabs);
             }
 
@@ -3060,7 +3820,7 @@ namespace AutoBusLines
             return len * 1.25f; // Grid and curve driving factor
         }
 
-        private void CreateBusLine(Entity busLinePrefabEntity, RouteData routeData, List<PlacedStop> orderedStops, int lineNumber, int hubIndex, int lineIndexInHub)
+        private void CreateBusLine(Entity busLinePrefabEntity, RouteData routeData, List<PlacedStop> orderedStops, int lineNumber, int hubIndex, int lineIndexInHub, Color32? customColor = null)
         {
             // 1. Create Route entity using native route archetype
             Entity routeEntity = EntityManager.CreateEntity(routeData.m_RouteArchetype);
@@ -3075,12 +3835,7 @@ namespace AutoBusLines
 
             EntityManager.SetComponentData(routeEntity, new RouteNumber { m_Number = lineNumber });
 
-            // Distinct, vibrant golden-ratio color scheme across the rainbow for each bus line
-            float lineHue = ((lineNumber - 1) * 0.618033988749895f) % 1.0f;
-            float saturation = 0.88f;
-            float value = 0.95f;
-            Color32 lineColor = HSVToRGB(lineHue, saturation, value);
-
+            Color32 lineColor = customColor ?? HexToColor(GetLineHexColor(lineNumber));
             EntityManager.SetComponentData(routeEntity, new Game.Routes.Color(lineColor));
             EntityManager.SetComponentData(routeEntity, new RouteBufferIndex { m_Index = -1 });
 
@@ -3090,6 +3845,45 @@ namespace AutoBusLines
             // So the route's own RouteWaypoint/RouteSegment buffers are deliberately NOT fetched
             // up front; they are filled in a final pass once all entity creation is done.
             var waypointEntities = new List<Entity>(orderedStops.Count);
+
+            // Assign custom names to curbside stops if not already set
+            var stopStreetNames = new string[orderedStops.Count];
+            var streetCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            for (int s = 0; s < orderedStops.Count; s++)
+            {
+                var st = orderedStops[s];
+                if (!st.IsStationBay)
+                {
+                    string street = GetRoadStreetName(st.RoadEntity) ?? "Road";
+                    stopStreetNames[s] = street;
+                    streetCounts[street] = streetCounts.TryGetValue(street, out int c) ? c + 1 : 1;
+                }
+            }
+
+            var streetIndices = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < orderedStops.Count; i++)
+            {
+                var stop = orderedStops[i];
+                if (!stop.IsStationBay && EntityManager.Exists(stop.StopEntity))
+                {
+                    string street = stopStreetNames[i] ?? "Road";
+                    int totalOnStreet = streetCounts[street];
+                    int currentIndex = streetIndices.TryGetValue(street, out int cur) ? cur + 1 : 1;
+                    streetIndices[street] = currentIndex;
+
+                    if (!EntityManager.HasComponent<Game.UI.CustomName>(stop.StopEntity))
+                    {
+                        string prefix = stop.IsPreExisting ? "Stop" : "New Stop";
+                        string stopName = (totalOnStreet > 1)
+                            ? $"{prefix} {street} {currentIndex}"
+                            : $"{prefix} {street}";
+
+                        if (_nameSystem == null)
+                            _nameSystem = World.GetOrCreateSystemManaged<Game.UI.NameSystem>();
+                        _nameSystem?.SetCustomName(stop.StopEntity, stopName);
+                    }
+                }
+            }
 
             // 2. Create connected Waypoints referencing placed stops
             for (int i = 0; i < orderedStops.Count; i++)

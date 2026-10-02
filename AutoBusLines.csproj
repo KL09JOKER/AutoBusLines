@@ -38,6 +38,10 @@
 		<None Remove="Reference\**" />
 		<EmbeddedResource Remove="Reference\**" />
 
+		<Compile Remove="auto-bus-lines-ui\**" />
+		<None Remove="auto-bus-lines-ui\**" />
+		<EmbeddedResource Remove="auto-bus-lines-ui\**" />
+
 	</ItemGroup>
 
 	<ItemGroup>
@@ -55,6 +59,12 @@
 			<Private>false</Private>
 		</Reference>
 		<Reference Include="Colossal.Localization">
+			<Private>false</Private>
+		</Reference>
+		<Reference Include="Colossal.UI.Binding">
+			<Private>false</Private>
+		</Reference>
+		<Reference Include="Colossal.UI">
 			<Private>false</Private>
 		</Reference>
 		<Reference Include="Colossal.Mathematics">
@@ -78,6 +88,9 @@
 		<Reference Include="Unity.Mathematics">
 			<Private>false</Private>
 		</Reference>
+		<Reference Include="Newtonsoft.Json">
+			<Private>false</Private>
+		</Reference>
 	</ItemGroup>
 
 	<ItemGroup>
@@ -96,5 +109,10 @@
 		<None Include="$(ModPropsFile)" Link="Properties\Mod.props" />
 		<None Include="$(ModTargetsFile)" Link="Properties\Mod.targets" />
 	</ItemGroup>
+
+	<Target Name="BuildUI" AfterTargets="DeployWIP">
+		<Exec Command="npm.cmd run build" WorkingDirectory="auto-bus-lines-ui" />
+		<Copy SourceFiles="auto-bus-lines-ui\mod.json" DestinationFolder="$(DeployDir)" />
+	</Target>
 
 </Project>
