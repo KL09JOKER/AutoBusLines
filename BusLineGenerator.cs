@@ -29,6 +29,7 @@ namespace AutoBusLines
         private enum GenerationStage
         {
             Idle,
+            WaitingForCleanup,
             WaitingForStopIndexing,
             InstantiatingRoutes
         }
@@ -77,6 +78,7 @@ namespace AutoBusLines
             public float3 Position;
             public float3 Forward;
             public int CorridorIndex;
+            public int SpanId;
         }
 
         private struct PlacedStop
@@ -221,9 +223,12 @@ namespace AutoBusLines
 
         public void RequestGeneration()
         {
+            // Wipe previously generated bus lines and roadside stops so new settings/density apply cleanly
+            DeleteAllBusLinesAndStops();
+
             _hasRun = false;
             _isManualRequest = true;
-            _generationStage = GenerationStage.Idle;
+            _generationStage = GenerationStage.WaitingForCleanup;
             _waitFrameCounter = 0;
             _currentTourIndex = 0;
             _plannedTours.Clear();
@@ -850,6 +855,17 @@ namespace AutoBusLines
             // -------------------------------------------------------------
             // MULTI-FRAME STAGED GENERATION DISPATCHER
             // -------------------------------------------------------------
+            // Stage 0: Wait for deletion and structural ECS changes to settle
+            if (_generationStage == GenerationStage.WaitingForCleanup)
+            {
+                _waitFrameCounter++;
+                if (_waitFrameCounter < 4)
+                    return;
+
+                _generationStage = GenerationStage.Idle;
+                _waitFrameCounter = 0;
+            }
+
             // Stage 2: Wait for game simulation to index stops in spatial trees (ObjectSearchTree, NetSearchTree)
             if (_generationStage == GenerationStage.WaitingForStopIndexing)
             {
@@ -1063,21 +1079,26 @@ namespace AutoBusLines
             int minStopsPerLine = Mod.setting != null ? Mod.setting.MinStopsPerLine : MIN_STOPS_PER_LINE;
             int maxStopsPerLine = Mod.setting != null ? Mod.setting.MaxStopsPerLine : MAX_STOPS_PER_LINE;
             float maxRouteLength = Mod.setting != null ? (float)Mod.setting.MaxRouteLength : DEFAULT_MAX_ROUTE_LENGTH;
-            float minStopSpacing = Mod.setting != null ? Mod.setting.MinStopSpacing : ABSOLUTE_MIN_STOP_SPACING;
+            float targetSpacing = Mod.setting != null ? (float)Mod.setting.TargetStopSpacing : 200f;
 
             if (minStopsPerLine < 4) minStopsPerLine = 4;
             if (maxStopsPerLine < minStopsPerLine) maxStopsPerLine = minStopsPerLine;
             if (maxRouteLength < 2000f) maxRouteLength = 2000f;
-            if (minStopSpacing < 5f) minStopSpacing = 5f;
+            if (targetSpacing < 50f) targetSpacing = 50f;
+            if (targetSpacing > 600f) targetSpacing = 600f;
+
+            float servedRadius = targetSpacing * 0.85f;
+            float minCollisionSpacing = math.clamp(targetSpacing * 0.40f, 35f, 120f);
+            float minSpanLength = math.min(MIN_SEGMENT_LENGTH_FOR_STOP, targetSpacing * 0.5f);
 
             var allCorridors = BuildCorridors();
             allCorridors.Sort((a, b) => b.TotalLength.CompareTo(a.TotalLength));
 
             // -------------------------------------------------------------
             // STEP 2: Place Bus Stops Across ALL City Blocks & Neighborhoods
-            // Ensures 100% city coverage: every neighborhood block gets transit service.
+            // Ensures full city coverage based on user's target density/spacing.
             // On two-way streets, stops alternate curbs to provide two-way coverage.
-            // Stops are spaced at ~150-200m and never placed too close to corners (< minStopSpacing).
+            // Multi-stop placement supports long arterial spans.
             // -------------------------------------------------------------
             var blockSpans = BuildBlockSpans(allCorridors);
 
@@ -1090,7 +1111,8 @@ namespace AutoBusLines
                 {
                     Position = allExistingStops[e].Position,
                     Forward = allExistingStops[e].Forward,
-                    CorridorIndex = allExistingStops[e].CorridorIndex
+                    CorridorIndex = allExistingStops[e].CorridorIndex,
+                    SpanId = -1
                 });
             }
 
@@ -1103,7 +1125,7 @@ namespace AutoBusLines
             for (int s = 0; s < blockSpans.Count; s++)
             {
                 var span = blockSpans[s];
-                if (span.TotalLength < MIN_SEGMENT_LENGTH_FOR_STOP)
+                if (span.TotalLength < minSpanLength)
                     continue;
 
                 // Check exclusion radius around hubs (stations & depots)
@@ -1119,19 +1141,6 @@ namespace AutoBusLines
                 if (isNearHub)
                     continue;
 
-                // Halve the stops in the algorithm: if a committed stop is already within STOP_PROXIMITY_SERVED_RADIUS (110m), this block is already served!
-                bool isAlreadyServed = false;
-                for (int k = 0; k < committedStops.Count; k++)
-                {
-                    if (math.distance(span.MidPosition, committedStops[k].Position) < STOP_PROXIMITY_SERVED_RADIUS)
-                    {
-                        isAlreadyServed = true;
-                        break;
-                    }
-                }
-                if (isAlreadyServed)
-                    continue;
-
                 // Reuse pre-existing stop if present on this span
                 if (TryFindExistingStopOnSpan(span, existingStopsByRoad, out PlacedStop reusedStop))
                 {
@@ -1144,23 +1153,84 @@ namespace AutoBusLines
                     {
                         Position = reusedStop.Position,
                         Forward = reusedStop.Forward,
-                        CorridorIndex = span.CorridorIndex
+                        CorridorIndex = span.CorridorIndex,
+                        SpanId = span.SpanId
                     });
-                    continue;
+
+                    // For short to moderate spans, the reused stop covers this span
+                    if (span.TotalLength <= targetSpacing * 1.6f)
+                        continue;
                 }
 
-                // Place alternating kerb stop
-                if (TryPlaceAlternatingKerbStop(span, span.MidEdge, span.MidT, span.MidPosition, span.CorridorForwardTangent,
-                                                span.SpanOrderInCorridor,
-                                                committedStops, candidatePrefabs, ref rng,
-                                                minStopSpacing, out PlacedStop placedStop))
+                // Determine how many stops this span should receive based on targetSpacing
+                int stopsToPlace = math.max(1, (int)math.round(span.TotalLength / targetSpacing));
+
+                for (int i = 0; i < stopsToPlace; i++)
                 {
-                    allGlobalStops.Add(placedStop);
-                    totalStopsPlaced++;
+                    Entity roadEdge;
+                    float edgeT;
+                    float3 roadPos;
+                    float3 roadTan;
+
+                    if (stopsToPlace == 1)
+                    {
+                        roadEdge = span.MidEdge;
+                        edgeT = span.MidT;
+                        roadPos = span.MidPosition;
+                        roadTan = span.MidTangent;
+                    }
+                    else
+                    {
+                        float targetDist = (i + 1.0f) / (stopsToPlace + 1.0f) * span.TotalLength;
+                        if (!TryGetSpanPointAtDistance(span, targetDist, out roadEdge, out edgeT, out roadPos, out roadTan))
+                            continue;
+                    }
+
+                    // Check hub exclusion
+                    bool ptNearHub = false;
+                    for (int ep = 0; ep < exclusionPositions.Count; ep++)
+                    {
+                        if (math.distance(roadPos, exclusionPositions[ep]) < HUB_EXCLUSION_RADIUS)
+                        {
+                            ptNearHub = true;
+                            break;
+                        }
+                    }
+                    if (ptNearHub)
+                        continue;
+
+                    // Check if this candidate location is already served by a committed stop
+                    // Stops on the same span are allowed if they exceed minCollisionSpacing;
+                    // Other spans are checked against servedRadius.
+                    bool isAlreadyServed = false;
+                    for (int k = 0; k < committedStops.Count; k++)
+                    {
+                        float checkDist = (committedStops[k].SpanId == span.SpanId) ? minCollisionSpacing : servedRadius;
+                        if (math.distance(roadPos, committedStops[k].Position) < checkDist)
+                        {
+                            isAlreadyServed = true;
+                            break;
+                        }
+                    }
+                    if (isAlreadyServed)
+                        continue;
+
+                    // Place alternating kerb stop
+                    int order = span.SpanOrderInCorridor + i;
+                    float3 forwardTan = (math.lengthsq(span.CorridorForwardTangent) > 0.001f) ? span.CorridorForwardTangent : roadTan;
+
+                    if (TryPlaceAlternatingKerbStop(span, roadEdge, edgeT, roadPos, forwardTan,
+                                                    order,
+                                                    committedStops, candidatePrefabs, ref rng,
+                                                    minCollisionSpacing, out PlacedStop placedStop))
+                    {
+                        allGlobalStops.Add(placedStop);
+                        totalStopsPlaced++;
+                    }
                 }
             }
 
-            log.Info($"Step 2 Complete: {allGlobalStops.Count} total stops available across the city ({totalStopsPlaced} newly placed, {existingStopsReused} existing reused). 100% neighborhood coverage achieved.");
+            log.Info($"Step 2 Complete: {allGlobalStops.Count} total stops available across the city ({totalStopsPlaced} newly placed, {existingStopsReused} existing reused) with target spacing {targetSpacing:F0}m.");
 
             // -------------------------------------------------------------
             // STEP 3: Plan the bus loops (see BusLineGenerator.Planning.cs)
@@ -1327,6 +1397,63 @@ namespace AutoBusLines
             return false;
         }
 
+        private bool TryGetSpanPointAtDistance(BlockSpan span, float targetDist, out Entity edgeEntity, out float t, out float3 pos, out float3 tangent)
+        {
+            edgeEntity = Entity.Null;
+            t = 0.5f;
+            pos = float3.zero;
+            tangent = new float3(0, 0, 1);
+
+            if (span.Edges == null || span.Edges.Count == 0)
+                return false;
+
+            float acc = 0f;
+            SpanEdge chosenEdge = span.Edges[span.Edges.Count - 1];
+            float distInEdge = 0f;
+
+            for (int e = 0; e < span.Edges.Count; e++)
+            {
+                var se = span.Edges[e];
+                if (acc + se.Length >= targetDist || e == span.Edges.Count - 1)
+                {
+                    chosenEdge = se;
+                    distInEdge = math.clamp(targetDist - acc, 0f, se.Length);
+                    break;
+                }
+                acc += se.Length;
+            }
+
+            if (!EntityManager.HasComponent<Curve>(chosenEdge.EdgeEntity))
+                return false;
+
+            var curve = EntityManager.GetComponentData<Curve>(chosenEdge.EdgeEntity);
+            float edgeLen = chosenEdge.Length;
+            float safeFraction = (edgeLen > 0.001f) ? (distInEdge / edgeLen) : 0.5f;
+
+            if (edgeLen >= 42.0f)
+            {
+                float minF = 20.0f / edgeLen;
+                float maxF = 1.0f - (22.0f / edgeLen);
+                safeFraction = math.clamp(safeFraction, minF, maxF);
+            }
+            else
+            {
+                safeFraction = math.clamp(safeFraction, 0.2f, 0.8f);
+            }
+
+            float actualT = chosenEdge.IsReversed ? (1.0f - safeFraction) : safeFraction;
+            pos = MathUtils.Position(curve.m_Bezier, actualT);
+
+            float3 cTan = MathUtils.Tangent(curve.m_Bezier, actualT);
+            if (chosenEdge.IsReversed)
+                cTan = -cTan;
+            tangent = math.normalizesafe(cTan, new float3(0, 0, 1));
+
+            edgeEntity = chosenEdge.EdgeEntity;
+            t = actualT;
+            return true;
+        }
+
         private bool TryPlaceAlternatingKerbStop(BlockSpan span, Entity roadEntity, float t,
                                                  float3 roadPos, float3 corridorTan,
                                                  int spanOrderInCorridor,
@@ -1438,14 +1565,15 @@ namespace AutoBusLines
                 selectedPrefab = candidatePrefabs[randIdx];
             }
 
-            if (!TryCreateBusStopEntity(roadEntity, t, stopPos, forward, span.HubEntity, span.CorridorIndex, span.SpanOrderInCorridor, isOutbound, selectedPrefab, out placedStop))
+            if (!TryCreateBusStopEntity(roadEntity, t, stopPos, forward, span.HubEntity, span.CorridorIndex, spanOrderInCorridor, isOutbound, selectedPrefab, out placedStop))
                 return false;
 
             committedStops.Add(new CommittedStopInfo
             {
                 Position = stopPos,
                 Forward = forward,
-                CorridorIndex = span.CorridorIndex
+                CorridorIndex = span.CorridorIndex,
+                SpanId = span.SpanId
             });
 
             return true;

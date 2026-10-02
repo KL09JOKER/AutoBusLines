@@ -27,7 +27,7 @@ Available on Paradox Mods: **[Auto Bus Lines on Paradox Mods](https://mods.parad
   - Built-in "Repair Broken Bus Lines" tool detects broken paths (from bulldozing, road upgrades, or modifications), nudges problematic stops, and re-triggers game pathfinding.
 - ⚙️ **Comprehensive Mod Settings**:
   - Accessible via **Options > Mod Settings > Auto Bus Lines**.
-  - Configure minimum/maximum stops per line, stop spacing, maximum route length, custom/modded bus stop prefabs, and auto-generation on city save load.
+  - Configure bus stop density presets (Balanced, Dense, Ultra / Every Block, Low / Express, Custom), target stop spacing (60m–500m), minimum/maximum stops per line, maximum route length, custom/modded bus stop prefabs, and auto-generation on city save load.
 
 ---
 

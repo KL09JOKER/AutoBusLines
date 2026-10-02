@@ -9,6 +9,15 @@ using Game.UI.Localization;
 
 namespace AutoBusLines
 {
+    public enum StopDensityMode
+    {
+        Balanced,
+        Dense,
+        Ultra,
+        Low,
+        Custom
+    }
+
     [FileLocation(nameof(AutoBusLines))]
     [SettingsUIGroupOrder(kMainGroup, kStopTypeGroup, kRouteGroup, kSpacingGroup)]
     [SettingsUIShowGroupName(kMainGroup, kStopTypeGroup, kRouteGroup, kSpacingGroup)]
@@ -95,6 +104,9 @@ namespace AutoBusLines
         public static readonly List<string> DiscoveredStopPrefabNames = new List<string>();
         public static int DiscoveredStopPrefabVersion = 1;
 
+        public static int SpacingVersion = 1;
+        public static int GetSpacingVersion() => SpacingVersion;
+
         [SettingsUISection(kSection, kStopTypeGroup)]
         [SettingsUIDropdown(typeof(Setting), nameof(GetBusStopPrefabDropdownItems))]
         [SettingsUIValueVersion(typeof(Setting), nameof(GetBusStopPrefabDropdownVersion))]
@@ -139,9 +151,72 @@ namespace AutoBusLines
         [SettingsUISlider(min = 2000, max = 50000, step = 500, unit = Unit.kLength)]
         public int MaxRouteLength { get; set; } = 15000;
 
+        private StopDensityMode _stopDensity = StopDensityMode.Balanced;
+        private int _targetStopSpacing = 200;
+
         [SettingsUISection(kSection, kSpacingGroup)]
-        [SettingsUISlider(min = 60, max = 300, step = 10, unit = Unit.kLength)]
-        public int MinStopSpacing { get; set; } = 120;
+        [SettingsUIValueVersion(typeof(Setting), nameof(GetSpacingVersion))]
+        public StopDensityMode StopDensity
+        {
+            get => _stopDensity;
+            set
+            {
+                _stopDensity = value;
+                switch (value)
+                {
+                    case StopDensityMode.Balanced:
+                        _targetStopSpacing = 200;
+                        break;
+                    case StopDensityMode.Dense:
+                        _targetStopSpacing = 120;
+                        break;
+                    case StopDensityMode.Ultra:
+                        _targetStopSpacing = 75;
+                        break;
+                    case StopDensityMode.Low:
+                        _targetStopSpacing = 350;
+                        break;
+                    case StopDensityMode.Custom:
+                        break;
+                }
+                SpacingVersion++;
+            }
+        }
+
+        [SettingsUISection(kSection, kSpacingGroup)]
+        [SettingsUISlider(min = 60, max = 500, step = 10, unit = Unit.kLength)]
+        [SettingsUIValueVersion(typeof(Setting), nameof(GetSpacingVersion))]
+        public int TargetStopSpacing
+        {
+            get => _targetStopSpacing;
+            set
+            {
+                _targetStopSpacing = value;
+                if (_stopDensity != StopDensityMode.Custom)
+                {
+                    int expected = _stopDensity switch
+                    {
+                        StopDensityMode.Balanced => 200,
+                        StopDensityMode.Dense => 120,
+                        StopDensityMode.Ultra => 75,
+                        StopDensityMode.Low => 350,
+                        _ => -1
+                    };
+                    if (value != expected)
+                    {
+                        _stopDensity = StopDensityMode.Custom;
+                    }
+                }
+                SpacingVersion++;
+            }
+        }
+
+        // Backward compatibility
+        public int MinStopSpacing
+        {
+            get => TargetStopSpacing;
+            set => TargetStopSpacing = value;
+        }
 
         // Custom line naming removed - game auto-generates names from RouteNumber
 
@@ -152,7 +227,8 @@ namespace AutoBusLines
             MinStopsPerLine = 6;
             MaxStopsPerLine = 18;
             MaxRouteLength = 15000;
-            MinStopSpacing = 120;
+            StopDensity = StopDensityMode.Balanced;
+            TargetStopSpacing = 200;
         }
     }
 
@@ -194,8 +270,20 @@ namespace AutoBusLines
                 { m_Setting.GetOptionLabelLocaleID(nameof(Setting.MaxRouteLength)), "Maximum Route Length" },
                 { m_Setting.GetOptionDescLocaleID(nameof(Setting.MaxRouteLength)), "Maximum perimeter distance of a bus loop (default: 15,000m / 15km). Loops exceeding this length are split into smaller routes." },
 
-                { m_Setting.GetOptionLabelLocaleID(nameof(Setting.MinStopSpacing)), "Minimum Stop Spacing" },
-                { m_Setting.GetOptionDescLocaleID(nameof(Setting.MinStopSpacing)), "Minimum distance required between any two bus stops to prevent clustering near intersections and corners (default: 120m)." },
+                { m_Setting.GetOptionLabelLocaleID(nameof(Setting.StopDensity)), "Bus Stop Density" },
+                { m_Setting.GetOptionDescLocaleID(nameof(Setting.StopDensity)), "Select how densely bus stops are placed across the city: Balanced (~200m), Dense (~120m), Ultra / Every Block (~75m), Low (~350m express), or Custom (fine-tune with slider below)." },
+
+                { m_Setting.GetEnumValueLocaleID(StopDensityMode.Balanced), "Balanced (~200m)" },
+                { m_Setting.GetEnumValueLocaleID(StopDensityMode.Dense), "Dense (~120m)" },
+                { m_Setting.GetEnumValueLocaleID(StopDensityMode.Ultra), "Ultra / Every Block (~75m)" },
+                { m_Setting.GetEnumValueLocaleID(StopDensityMode.Low), "Low / Express (~350m)" },
+                { m_Setting.GetEnumValueLocaleID(StopDensityMode.Custom), "Custom (Slider)" },
+
+                { m_Setting.GetOptionLabelLocaleID(nameof(Setting.TargetStopSpacing)), "Target Stop Spacing" },
+                { m_Setting.GetOptionDescLocaleID(nameof(Setting.TargetStopSpacing)), "Distance between bus stops along roads and corridors (default: 200m). Lower values place more stops closer together; higher values space stops farther apart." },
+
+                { m_Setting.GetOptionLabelLocaleID(nameof(Setting.MinStopSpacing)), "Target Stop Spacing" },
+                { m_Setting.GetOptionDescLocaleID(nameof(Setting.MinStopSpacing)), "Distance between bus stops along roads and corridors (default: 200m)." },
 
                 { m_Setting.GetOptionGroupLocaleID(Setting.kMainGroup), "Bus Transit Automation" },
                 { m_Setting.GetOptionGroupLocaleID(Setting.kStopTypeGroup), "Bus Stop Model Selection" },
