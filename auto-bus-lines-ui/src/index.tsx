@@ -1,10 +1,9 @@
 import { ModRegistrar } from "cs2/modding";
-import { ToolbarButton } from "./mods/ToolbarButton";
-import { PlanPanel } from "./mods/PlanPanel";
+import { AutoBusLinesMenuButton, AutoBusLinesPanel } from "./mods/AutoBusLinesMenu";
 
 const register: ModRegistrar = (moduleRegistry) => {
-    moduleRegistry.append("GameTopRight", ToolbarButton);
-    moduleRegistry.append("Game", PlanPanel);
+    moduleRegistry.append("UniversalModMenu", AutoBusLinesMenuButton);
+    moduleRegistry.append("Game", AutoBusLinesPanel);
 };
 
 export default register;

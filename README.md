@@ -2,50 +2,89 @@
 
 [![Paradox Mods](https://img.shields.io/badge/Paradox%20Mods-161531-blue.svg)](https://mods.paradoxplaza.com/mods/161531/Windows)
 [![Cities: Skylines II](https://img.shields.io/badge/Cities:%20Skylines%20II-Mod-orange.svg)](https://www.paradoxinteractive.com/games/cities-skylines-ii)
+[![Version](https://img.shields.io/badge/Version-1.1.9-green.svg)](https://mods.paradoxplaza.com/mods/161531/Windows)
 [![Status](https://img.shields.io/badge/Status-Beta-yellow.svg)](https://mods.paradoxplaza.com/mods/161531/Windows)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE.md)
 
-An automated public transit mod for **Cities: Skylines II** that plans, places roadside bus stops with safe mid-span road clearances, generates balanced 2-Opt loop routes, and connects them directly to your city's bus depots and passenger terminals.
+Auto Bus Lines automatically designs and constructs complete, functional bus transit networks across your entire city. Open the planner, calculate a transit plan, review it interactively, tweak what you want, and hit **Build Selected**.
 
-Available on Paradox Mods: **[Auto Bus Lines on Paradox Mods](https://mods.paradoxplaza.com/mods/161531/Windows)**
+**[Available on Paradox Mods](https://mods.paradoxplaza.com/mods/161531/Windows)**
+
+---
+
+## How to Use
+
+1. Build at least one **Bus Depot** or **Passenger Bus Terminal** in your city.
+2. Open the **Auto Bus Lines** floating window from the top-right toolbar bus icon (or via Options → Mod Settings → Auto Bus Lines).
+3. Go to the **Plan** tab and click **Calculate Transit Plan** to generate a full city-wide bus network proposal.
+4. Review proposed routes and stops. Toggle off any stops or entire lines you don't want.
+5. Click **Build Selected** to construct only the approved routes — or **Discard** to start over with **New Plan**.
+6. If you upgrade roads or bulldoze anything later, use **Repair Broken Bus Lines** in the **Settings** tab.
 
 ---
 
 ## Features
 
-- 🗺️ **Interactive In-Game Plan Mode (Preview Window)**:
-  - Preview proposed bus lines and stops in a floating in-game window before constructing anything in the city.
-  - **Line & Stop Toggles**: Toggle off individual stop locations or entire proposed bus lines to customize the network prior to building.
-  - **Alternative Plan Generator**: Click **[New Plan]** to calculate alternative network layouts with different corridor pairings and loop topologies.
-  - **Build Selected or Discard**: Build only what you approve with **[Build Selected]**, or inspect the plan for inspiration and safely **[Discard]** without altering your city.
-  - **Camera Focus**: Click the Focus button on any proposed stop to fly the camera straight to that location in the city.
-  - **Top-Right Toolbar Icon**: Convenient transit button with a live route badge count for toggling the planner window anytime.
-- 🚌 **City-Wide Coverage**: Scans paved road networks across residential, commercial, and industrial districts to deliver complete transit accessibility.
-- 🛑 **Smart Roadside Bus Stop Placement**:
-  - Dynamically places roadside bus stops safely along road spans outside of intersection conflict zones.
-  - Automatically respects right-hand and left-hand traffic rules, divided roads, and one-way streets.
-- 🏢 **Depot & Terminal Connectivity**:
-  - Automatically locates and links routes to the closest Bus Depots and Bus Terminals without manual district setup.
-- 🔄 **2-Opt Transit Loop Optimization**:
-  - Intelligent route planning constructs smooth, circular loops that avoid self-intersecting bottlenecks and minimize vehicle bunching.
-- 🔁 **Existing Stop & Platform Reuse**:
-  - Discovers existing bus stops and station platforms across your city and seamlessly integrates them into newly planned lines.
-- 🔧 **In-Game Route Repair Tool**:
-  - Built-in "Repair Broken Bus Lines" tool detects broken paths (from bulldozing, road upgrades, or modifications), nudges problematic stops, and re-triggers game pathfinding.
-- ⚙️ **Comprehensive Mod Settings**:
-  - Accessible via **Options > Mod Settings > Auto Bus Lines**.
-  - Configure Plan Mode toggle, open planner window, bus stop density presets (Balanced, Dense, Ultra / Every Block, Low / Express, Custom), target stop spacing (60m–500m), minimum/maximum stops per line, maximum route length, custom/modded bus stop prefabs, and auto-generation on city save load.
+### 🗺️ Interactive Plan Mode
+- Preview the full proposed bus network before anything is placed in the city.
+- **Line & Stop Toggles**: Enable or disable individual stops or entire proposed lines.
+- **Alternative Plans**: Click **[New Plan]** to get a completely different corridor layout.
+- **Build Selected / Discard**: Build only what you approve. Discard safely without touching your city.
+- **Camera Focus**: Click the focus button on any stop to fly the camera directly to it.
+- **Variant Badge**: Shows which plan variant you're currently viewing (e.g. Variant #2).
+
+### 🚏 Smart Stop Placement
+- Automatically places roadside bus stops along road spans, safely away from intersections.
+- Respects right-hand and left-hand traffic, divided roads, and one-way streets.
+- Reuses existing bus stops and station platforms wherever they already exist.
+
+### 🔁 Route Optimization
+- Multi-corridor planner with 2-Opt path smoothing generates smooth, circular loop lines.
+- Connects all routes directly to your nearest Bus Depots and Bus Terminals.
+
+### 🎨 Vibrant Line Colors
+- **Per Station mode**: Each terminal hub anchors to a bold, distinct color family. Lines sharing a hub stay cohesive — never dull or washed-out.
+- **Random mode**: 16 hand-picked vivid transit colors (Electric Blue, Safety Orange, Vivid Emerald, Neon Violet, Crimson, Cyan, Amber, Deep Pink…).
+
+### 🚌 Custom Bus Stop Support
+- Supports vanilla EU and NA bus stop models (shelter, sign, bikes).
+- Custom/modded bus stop prefabs are detected and shown with their mod thumbnail in the Settings selector.
+
+### ⚙️ Settings Tab
+- Stop density presets: Balanced, Dense, Ultra / Every Block, Low / Express, Custom.
+- Target stop spacing slider (60m – 500m).
+- Min / max stops per line, maximum route length.
+- Line color scheme (Per Station or Random Rainbow).
+- Custom bus stop model selector with squared visual thumbnails.
+- Auto-generate on city load toggle.
+- Repair Broken Bus Lines tool.
 
 ---
 
-## Contributing & Collaboration
+## Contributing
 
-Contributions, bug fixes, suggestions, and localization updates are welcome!
-- To contribute, fork this repository and submit a **Pull Request**.
+Contributions, bug fixes, feature suggestions, and localization updates are welcome!
+
+- Fork this repository and submit a **Pull Request**.
 - Please describe the issue or enhancement clearly in your PR.
+- The UI is written in **TypeScript + React (SCSS)** in `auto-bus-lines-ui/src/`.
+- The backend is written in **C#** targeting the Cities: Skylines II modding SDK.
+
+### UI Development
+```bash
+cd auto-bus-lines-ui
+npm install
+npm run build   # compile once
+npm run dev     # watch mode
+```
+
+### C# Build
+```bash
+dotnet build    # compiles + deploys to your local CS2 Mods folder
+```
 
 ---
 
 ## License
- 
+
 This project is open-source software licensed under the **GNU General Public License v3.0 (GPL-3.0)**. See the [LICENSE.md](LICENSE.md) file for details.

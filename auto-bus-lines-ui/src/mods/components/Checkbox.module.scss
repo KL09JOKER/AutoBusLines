@@ -1,0 +1,37 @@
+$borderColorNormal: rgba(254, 254, 254, 0.5);
+$borderColorFocused: rgba(254, 254, 254, 0.8);
+
+.checkboxContainer {
+  width: 18rem;
+  height: 18rem;
+  min-width: 18rem;
+  min-height: 18rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5rem solid $borderColorNormal;
+  border-radius: 3rem;
+  background-color: rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+
+  &:hover {
+    background-color: rgba(255, 255, 255, 0.15);
+    border-color: $borderColorFocused;
+  }
+
+  &:active {
+    background-color: rgba(255, 255, 255, 0.25);
+    border-color: #ffffff;
+  }
+
+  &.checked {
+    background-color: var(--accentColorNormal, #2b6cb0);
+    border-color: var(--accentColorNormal, #3182ce);
+  }
+}
+
+.checkmarkIcon {
+  width: 13rem;
+  height: 13rem;
+}

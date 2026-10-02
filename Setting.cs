@@ -1,14 +1,20 @@
+using System;
 using System.Collections.Generic;
 using Colossal;
 using Colossal.IO.AssetDatabase;
 using Game.Modding;
 using Game.Settings;
 using Game.UI;
-using Game.UI.Widgets;
 using Game.UI.Localization;
 
 namespace AutoBusLines
 {
+    public enum LineColorMode
+    {
+        PerStation,
+        Random
+    }
+
     public enum StopDensityMode
     {
         Balanced,
@@ -19,156 +25,79 @@ namespace AutoBusLines
     }
 
     [FileLocation(nameof(AutoBusLines))]
-    [SettingsUIGroupOrder(kMainGroup, kStopTypeGroup, kRouteGroup, kSpacingGroup)]
-    [SettingsUIShowGroupName(kMainGroup, kStopTypeGroup, kRouteGroup, kSpacingGroup)]
+    [SettingsUIGroupOrder(kHowToUseGroup, kVersionGroup)]
+    [SettingsUIShowGroupName(kHowToUseGroup, kVersionGroup)]
     public class Setting : ModSetting
     {
         public const string kSection = "Main";
-        public const string kMainGroup = "Main";
-        public const string kStopTypeGroup = "StopTypes";
-        public const string kRouteGroup = "RouteSettings";
-        public const string kSpacingGroup = "StopSpacing";
+        public const string kHowToUseGroup = "HowToUse";
+        public const string kVersionGroup = "Version";
 
         public Setting(IMod mod) : base(mod)
         {
         }
 
-        [SettingsUISection(kSection, kMainGroup)]
-        public bool AutoGenerateOnLoad { get; set; } = true;
+        // ==========================================
+        // Settings UI Properties (Options -> Mod Settings)
+        // ==========================================
 
-        [SettingsUISection(kSection, kMainGroup)]
+        [SettingsUISection(kSection, kHowToUseGroup)]
+        [SettingsUIMultilineText]
+        public string HowToUse => string.Empty;
+
+        [SettingsUISection(kSection, kVersionGroup)]
+        public string ModVersion => "1.1.0";
+
+        // ==========================================
+        // Backend / Custom UI Settings (Persisted to Disk)
+        // Hidden from game Options UI via [SettingsUIHidden]
+        // ==========================================
+
+        [SettingsUIHidden]
         public bool EnablePlanMode { get; set; } = true;
 
-        [SettingsUISection(kSection, kMainGroup)]
-        [SettingsUIButton]
-        public bool OpenTransitPlanner
-        {
-            set
-            {
-                AutoBusLinesUISystem.Instance?.OpenPanel();
-            }
-        }
-
-        [SettingsUISection(kSection, kMainGroup)]
-        [SettingsUIButton]
-        [SettingsUIConfirmation]
-        public bool TriggerScanNow
-        {
-            set
-            {
-                Mod.log.Info("Manual scan triggered via Mod Settings UI!");
-
-                // Request regeneration by resetting the BusLineGenerator system
-                var world = Unity.Entities.World.DefaultGameObjectInjectionWorld;
-                if (world != null)
-                {
-                    var generator = world.GetExistingSystemManaged<BusLineGenerator>();
-                    if (generator != null)
-                    {
-                        generator.RequestGeneration();
-                        Mod.log.Info("Regeneration requested!");
-                    }
-                }
-            }
-        }
-
-        [SettingsUISection(kSection, kMainGroup)]
-        [SettingsUIButton]
-        [SettingsUIConfirmation]
-        public bool RepairBrokenRoutes
-        {
-            set
-            {
-                Mod.log.Info("Manual route repair triggered via Mod Settings UI!");
-                var world = Unity.Entities.World.DefaultGameObjectInjectionWorld;
-                if (world != null)
-                {
-                    var generator = world.GetExistingSystemManaged<BusLineGenerator>();
-                    if (generator != null)
-                    {
-                        generator.RequestRepair();
-                        Mod.log.Info("Route repair requested!");
-                    }
-                }
-            }
-        }
-
-        [SettingsUISection(kSection, kMainGroup)]
-        [SettingsUIButton]
-        [SettingsUIConfirmation]
-        public bool DeleteAllLinesAndStops
-        {
-            set
-            {
-                Mod.log.Info("Delete all bus lines and stops triggered via Mod Settings UI!");
-                var world = Unity.Entities.World.DefaultGameObjectInjectionWorld;
-                if (world != null)
-                {
-                    var generator = world.GetExistingSystemManaged<BusLineGenerator>();
-                    if (generator != null)
-                    {
-                        generator.DeleteAllBusLinesAndStops();
-                        Mod.log.Info("Deletion complete!");
-                    }
-                }
-            }
-        }
-
         public static readonly List<string> DiscoveredStopPrefabNames = new List<string>();
+        public static readonly Dictionary<string, string> DiscoveredStopPrefabIcons = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         public static int DiscoveredStopPrefabVersion = 1;
 
         public static int SpacingVersion = 1;
         public static int GetSpacingVersion() => SpacingVersion;
 
-        [SettingsUISection(kSection, kStopTypeGroup)]
-        [SettingsUIDropdown(typeof(Setting), nameof(GetBusStopPrefabDropdownItems))]
-        [SettingsUIValueVersion(typeof(Setting), nameof(GetBusStopPrefabDropdownVersion))]
+        [SettingsUIHidden]
         public string SelectedStopPrefab { get; set; } = "All";
 
-        public static DropdownItem<string>[] GetBusStopPrefabDropdownItems()
-        {
-            var items = new List<DropdownItem<string>>();
-            items.Add(new DropdownItem<string>
-            {
-                value = "All",
-                displayName = LocalizedString.Value("All Available Models (Randomized)")
-            });
-
-            for (int i = 0; i < DiscoveredStopPrefabNames.Count; i++)
-            {
-                string name = DiscoveredStopPrefabNames[i];
-                items.Add(new DropdownItem<string>
-                {
-                    value = name,
-                    displayName = LocalizedString.Value(name)
-                });
-            }
-
-            return items.ToArray();
-        }
-
-        public static int GetBusStopPrefabDropdownVersion()
-        {
-            return DiscoveredStopPrefabVersion;
-        }
-
-        [SettingsUISection(kSection, kRouteGroup)]
-        [SettingsUISlider(min = 4, max = 30, step = 1, unit = Unit.kInteger)]
+        [SettingsUIHidden]
         public int MinStopsPerLine { get; set; } = 6;
 
-        [SettingsUISection(kSection, kRouteGroup)]
-        [SettingsUISlider(min = 4, max = 50, step = 1, unit = Unit.kInteger)]
+        [SettingsUIHidden]
         public int MaxStopsPerLine { get; set; } = 18;
 
-        [SettingsUISection(kSection, kRouteGroup)]
-        [SettingsUISlider(min = 2000, max = 50000, step = 500, unit = Unit.kLength)]
+        [SettingsUIHidden]
         public int MaxRouteLength { get; set; } = 15000;
+
+        private LineColorMode _lineColoring = LineColorMode.PerStation;
+
+        [SettingsUIHidden]
+        public LineColorMode LineColoring
+        {
+            get => _lineColoring;
+            set
+            {
+                _lineColoring = value;
+                var world = Unity.Entities.World.DefaultGameObjectInjectionWorld;
+                if (world != null)
+                {
+                    var generator = world.GetExistingSystemManaged<BusLineGenerator>();
+                    generator?.UpdatePlanColors(value);
+                    AutoBusLinesUISystem.Instance?.SetColorMode(value == LineColorMode.PerStation ? "perStation" : "random");
+                }
+            }
+        }
 
         private StopDensityMode _stopDensity = StopDensityMode.Balanced;
         private int _targetStopSpacing = 200;
 
-        [SettingsUISection(kSection, kSpacingGroup)]
-        [SettingsUIValueVersion(typeof(Setting), nameof(GetSpacingVersion))]
+        [SettingsUIHidden]
         public StopDensityMode StopDensity
         {
             get => _stopDensity;
@@ -196,9 +125,7 @@ namespace AutoBusLines
             }
         }
 
-        [SettingsUISection(kSection, kSpacingGroup)]
-        [SettingsUISlider(min = 60, max = 500, step = 10, unit = Unit.kLength)]
-        [SettingsUIValueVersion(typeof(Setting), nameof(GetSpacingVersion))]
+        [SettingsUIHidden]
         public int TargetStopSpacing
         {
             get => _targetStopSpacing;
@@ -225,18 +152,17 @@ namespace AutoBusLines
         }
 
         // Backward compatibility
+        [SettingsUIHidden]
         public int MinStopSpacing
         {
             get => TargetStopSpacing;
             set => TargetStopSpacing = value;
         }
 
-        // Custom line naming removed - game auto-generates names from RouteNumber
-
         public override void SetDefaults()
         {
-            AutoGenerateOnLoad = true;
             EnablePlanMode = true;
+            LineColoring = LineColorMode.PerStation;
             SelectedStopPrefab = "All";
             MinStopsPerLine = 6;
             MaxStopsPerLine = 18;
@@ -260,54 +186,29 @@ namespace AutoBusLines
             return new Dictionary<string, string>
             {
                 { m_Setting.GetSettingsLocaleID(), "Auto Bus Lines" },
-                { m_Setting.GetOptionLabelLocaleID(nameof(Setting.AutoGenerateOnLoad)), "Auto Generate On Load" },
-                { m_Setting.GetOptionDescLocaleID(nameof(Setting.AutoGenerateOnLoad)), "Automatically place bus stops and generate bus lines connecting all roads to the nearest bus depot when a save is loaded." },
-                { m_Setting.GetOptionLabelLocaleID(nameof(Setting.EnablePlanMode)), "Preview Plan Before Building" },
-                { m_Setting.GetOptionDescLocaleID(nameof(Setting.EnablePlanMode)), "When enabled, proposed bus lines and stops are shown in an interactive in-game preview window. You can toggle off individual stops or entire lines, calculate alternative networks, or build only what you select." },
-                { m_Setting.GetOptionLabelLocaleID(nameof(Setting.OpenTransitPlanner)), "Open Transit Planner Window" },
-                { m_Setting.GetOptionDescLocaleID(nameof(Setting.OpenTransitPlanner)), "Opens the interactive Transit Planner window to preview, inspect, customize, and build bus networks." },
-                { m_Setting.GetOptionLabelLocaleID(nameof(Setting.TriggerScanNow)), "Generate Bus Lines Now" },
-                { m_Setting.GetOptionDescLocaleID(nameof(Setting.TriggerScanNow)), "Manually trigger bus stop placement and bus line generation across all paved roads in the city." },
-                { m_Setting.GetOptionWarningLocaleID(nameof(Setting.TriggerScanNow)), "This will place bus stops on paved roads and create bus transit lines connected to the nearest depot/station. Continue?" },
-                { m_Setting.GetOptionLabelLocaleID(nameof(Setting.RepairBrokenRoutes)), "Repair Broken Bus Lines" },
-                { m_Setting.GetOptionDescLocaleID(nameof(Setting.RepairBrokenRoutes)), "Scans existing bus routes for pathfinding failures, nudges problematic roadside bus stops away from road conflict zones, and re-triggers pathfinding." },
-                { m_Setting.GetOptionWarningLocaleID(nameof(Setting.RepairBrokenRoutes)), "This will scan all bus routes, adjust problematic roadside stop positions that failed pathfinding, and re-calculate route paths. Continue?" },
-                { m_Setting.GetOptionLabelLocaleID(nameof(Setting.DeleteAllLinesAndStops)), "Delete All Bus Lines & Stops" },
-                { m_Setting.GetOptionDescLocaleID(nameof(Setting.DeleteAllLinesAndStops)), "Wipes and removes all generated and existing bus transit lines and roadside bus stops across the entire city. (Permanent stations and depots are preserved)." },
-                { m_Setting.GetOptionWarningLocaleID(nameof(Setting.DeleteAllLinesAndStops)), "Are you sure you want to delete ALL bus transit lines and roadside bus stops in your city? This action cannot be undone." },
-
-                { m_Setting.GetOptionLabelLocaleID(nameof(Setting.SelectedStopPrefab)), "Bus Stop Model" },
-                { m_Setting.GetOptionDescLocaleID(nameof(Setting.SelectedStopPrefab)), "Select the specific bus stop model/prefab to place across the road network, or choose 'All Available Models (Randomized)'." },
-
-                { m_Setting.GetOptionLabelLocaleID(nameof(Setting.MinStopsPerLine)), "Minimum Stops Per Line" },
-                { m_Setting.GetOptionDescLocaleID(nameof(Setting.MinStopsPerLine)), "Minimum number of bus stops required to form a valid bus transit line (default: 6)." },
-
-                { m_Setting.GetOptionLabelLocaleID(nameof(Setting.MaxStopsPerLine)), "Maximum Stops Per Line" },
-                { m_Setting.GetOptionDescLocaleID(nameof(Setting.MaxStopsPerLine)), "Maximum number of bus stops on a single bus route before closing the loop (default: 18)." },
-
-                { m_Setting.GetOptionLabelLocaleID(nameof(Setting.MaxRouteLength)), "Maximum Route Length" },
-                { m_Setting.GetOptionDescLocaleID(nameof(Setting.MaxRouteLength)), "Maximum perimeter distance of a bus loop (default: 15,000m / 15km). Loops exceeding this length are split into smaller routes." },
-
-                { m_Setting.GetOptionLabelLocaleID(nameof(Setting.StopDensity)), "Bus Stop Density" },
-                { m_Setting.GetOptionDescLocaleID(nameof(Setting.StopDensity)), "Select how densely bus stops are placed across the city: Balanced (~200m), Dense (~120m), Ultra / Every Block (~75m), Low (~350m express), or Custom (fine-tune with slider below)." },
-
-                { m_Setting.GetEnumValueLocaleID(StopDensityMode.Balanced), "Balanced (~200m)" },
-                { m_Setting.GetEnumValueLocaleID(StopDensityMode.Dense), "Dense (~120m)" },
-                { m_Setting.GetEnumValueLocaleID(StopDensityMode.Ultra), "Ultra / Every Block (~75m)" },
-                { m_Setting.GetEnumValueLocaleID(StopDensityMode.Low), "Low / Express (~350m)" },
-                { m_Setting.GetEnumValueLocaleID(StopDensityMode.Custom), "Custom (Slider)" },
-
-                { m_Setting.GetOptionLabelLocaleID(nameof(Setting.TargetStopSpacing)), "Target Stop Spacing" },
-                { m_Setting.GetOptionDescLocaleID(nameof(Setting.TargetStopSpacing)), "Distance between bus stops along roads and corridors (default: 200m). Lower values place more stops closer together; higher values space stops farther apart." },
-
-                { m_Setting.GetOptionLabelLocaleID(nameof(Setting.MinStopSpacing)), "Target Stop Spacing" },
-                { m_Setting.GetOptionDescLocaleID(nameof(Setting.MinStopSpacing)), "Distance between bus stops along roads and corridors (default: 200m)." },
-
-                { m_Setting.GetOptionGroupLocaleID(Setting.kMainGroup), "Bus Transit Automation" },
-                { m_Setting.GetOptionGroupLocaleID(Setting.kStopTypeGroup), "Bus Stop Model Selection" },
-                { m_Setting.GetOptionGroupLocaleID(Setting.kRouteGroup), "Route & Line Size Settings" },
-                { m_Setting.GetOptionGroupLocaleID(Setting.kSpacingGroup), "Stop Placement & Spacing" },
                 { m_Setting.GetOptionTabLocaleID(Setting.kSection), "General" },
+                { m_Setting.GetOptionGroupLocaleID(Setting.kHowToUseGroup), "How To Use" },
+                { m_Setting.GetOptionGroupLocaleID(Setting.kVersionGroup), "Information" },
+
+                // How to Use
+                { m_Setting.GetOptionLabelLocaleID(nameof(Setting.HowToUse)),
+                    "1. BUILD A DEPOT OR TERMINAL:\n" +
+                    "   Place at least one Bus Depot or Passenger Bus Terminal in your city so buses have an operational base.\n\n" +
+                    "2. OPEN THE TRANSIT PLANNER:\n" +
+                    "   Click the hexagonal Chirper icon (Universal Mod Menu) in the bottom-right corner of the screen and select the Auto Bus Lines bus icon.\n\n" +
+                    "3. CONFIGURE NETWORK PREFERENCES:\n" +
+                    "   In the Settings tab, customize stop spacing (Balanced, Dense, Ultra, Low, or Custom), select your preferred bus stop shelter/sign model, and adjust route sizes.\n\n" +
+                    "4. PREVIEW & INSPECT ROUTES:\n" +
+                    "   Click 'Generate Plan' or 'New Alternative' to generate a route proposal. The plan shows live route lines on the map. You can toggle off individual stops or entire routes, and click stops to focus the camera.\n\n" +
+                    "5. BUILD TRANSIT LINES:\n" +
+                    "   Click 'Build Selected Routes' to construct the active transit network in your city!\n\n" +
+                    "6. MAINTENANCE & REPAIRS:\n" +
+                    "   If you alter roads or bulldoze intersections, open the Settings tab and click 'Repair Broken Bus Lines' to re-path routes, or 'Delete All Lines & Stops' to start fresh."
+                },
+
+                // Version
+                { m_Setting.GetOptionLabelLocaleID(nameof(Setting.ModVersion)), "Version" },
+                { m_Setting.GetOptionDescLocaleID(nameof(Setting.ModVersion)), "Current installed release version of the Auto Bus Lines mod." },
             };
         }
 
