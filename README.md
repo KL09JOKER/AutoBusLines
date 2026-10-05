@@ -56,7 +56,7 @@ Auto Bus Lines automatically designs and constructs complete, functional bus tra
 - Line color scheme (Per Station or Random Rainbow).
 - Custom bus stop model selector with squared visual thumbnails.
 - Auto-generate on city load toggle.
-- Repair Broken Bus Lines tool.
+- Repair Broken Bus Lines tool
 
 ---
 
