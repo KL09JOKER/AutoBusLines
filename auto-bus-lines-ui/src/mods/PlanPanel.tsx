@@ -43,6 +43,8 @@ const lineColorModeBinding = bindValue<string>("autoBusLines", "lineColorMode", 
 
 // Settings bindings
 const enablePlanModeBinding = bindValue<boolean>("autoBusLines", "enablePlanMode", true);
+const excludeDeadEndsBinding = bindValue<boolean>("autoBusLines", "excludeDeadEnds", true);
+const deadEndThresholdBinding = bindValue<number>("autoBusLines", "deadEndDistanceThreshold", 300);
 const minStopsBinding = bindValue<number>("autoBusLines", "minStopsPerLine", 6);
 const maxStopsBinding = bindValue<number>("autoBusLines", "maxStopsPerLine", 18);
 const maxRouteLengthBinding = bindValue<number>("autoBusLines", "maxRouteLength", 15000);
@@ -209,6 +211,8 @@ export const PlanPanel: React.FC<PlanPanelProps> = ({ onClose }) => {
 
     // Settings values
     const enablePlanMode = useValue(enablePlanModeBinding);
+    const excludeDeadEnds = useValue(excludeDeadEndsBinding);
+    const deadEndThreshold = useValue(deadEndThresholdBinding);
     const minStops = useValue(minStopsBinding);
     const maxStops = useValue(maxStopsBinding);
     const maxRouteLength = useValue(maxRouteLengthBinding);
@@ -578,6 +582,53 @@ export const PlanPanel: React.FC<PlanPanelProps> = ({ onClose }) => {
                             ))}
                         </div>
                     </div>
+
+                    <div className={styles.settingsRow}>
+                        <div className={styles.settingInfo}>
+                            <span className={styles.settingTitle}>Prevent Dead End Stops</span>
+                            <span className={styles.settingDesc}>
+                                Exclude cul-de-sacs and dead-end roads from stop placement to avoid difficult U-turns.
+                            </span>
+                        </div>
+                        <div className={styles.settingControl}>
+                            <Checkbox
+                                isChecked={excludeDeadEnds}
+                                onValueToggle={(checked) => trigger("autoBusLines", "setExcludeDeadEnds", checked)}
+                            />
+                        </div>
+                    </div>
+
+                    {excludeDeadEnds && (
+                        <div className={styles.settingsRowStacked}>
+                            <div className={styles.settingInfo}>
+                                <span className={styles.settingTitle}>Long Dead End Threshold</span>
+                                <span className={styles.settingDesc}>
+                                    Allow bus stops on dead-end roads if their length exceeds this distance.
+                                </span>
+                            </div>
+                            <SliderInput
+                                value={deadEndThreshold || 300}
+                                min={50}
+                                max={2000}
+                                step={25}
+                                unit="m"
+                                multiplier={1}
+                                onChange={(val) => trigger("autoBusLines", "setDeadEndThreshold", val)}
+                            />
+                            <div className={styles.presetGroup}>
+                                {[100, 200, 350, 500, 800].map((dist) => (
+                                    <button
+                                        key={dist}
+                                        type="button"
+                                        className={`${styles.presetBtn} ${deadEndThreshold === dist ? styles.presetActive : ""}`}
+                                        onClick={() => trigger("autoBusLines", "setDeadEndThreshold", dist)}
+                                    >
+                                        {dist}m
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
 
                     <div className={styles.settingsRowStacked}>
                         <div className={styles.settingInfo}>

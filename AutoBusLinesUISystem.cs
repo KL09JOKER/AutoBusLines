@@ -25,6 +25,8 @@ namespace AutoBusLines
 
         // Settings bindings
         private ValueBinding<bool> m_EnablePlanMode;
+        private ValueBinding<bool> m_ExcludeDeadEnds;
+        private ValueBinding<int> m_DeadEndDistanceThreshold;
         private ValueBinding<int> m_MinStopsPerLine;
         private ValueBinding<int> m_MaxStopsPerLine;
         private ValueBinding<int> m_MaxRouteLength;
@@ -50,6 +52,8 @@ namespace AutoBusLines
             // Settings bindings
             var s = Mod.setting;
             AddBinding(m_EnablePlanMode = new ValueBinding<bool>(kGroup, "enablePlanMode", s?.EnablePlanMode ?? true));
+            AddBinding(m_ExcludeDeadEnds = new ValueBinding<bool>(kGroup, "excludeDeadEnds", s?.ExcludeDeadEnds ?? true));
+            AddBinding(m_DeadEndDistanceThreshold = new ValueBinding<int>(kGroup, "deadEndDistanceThreshold", s?.DeadEndDistanceThreshold ?? 300));
             AddBinding(m_MinStopsPerLine = new ValueBinding<int>(kGroup, "minStopsPerLine", s?.MinStopsPerLine ?? 6));
             AddBinding(m_MaxStopsPerLine = new ValueBinding<int>(kGroup, "maxStopsPerLine", s?.MaxStopsPerLine ?? 18));
             AddBinding(m_MaxRouteLength = new ValueBinding<int>(kGroup, "maxRouteLength", s?.MaxRouteLength ?? 15000));
@@ -74,6 +78,8 @@ namespace AutoBusLines
 
             // Settings trigger bindings
             AddBinding(new TriggerBinding<bool>(kGroup, "setEnablePlanMode", OnSetEnablePlanMode));
+            AddBinding(new TriggerBinding<bool>(kGroup, "setExcludeDeadEnds", OnSetExcludeDeadEnds));
+            AddBinding(new TriggerBinding<int>(kGroup, "setDeadEndThreshold", OnSetDeadEndThreshold));
             AddBinding(new TriggerBinding<int>(kGroup, "setMinStops", OnSetMinStops));
             AddBinding(new TriggerBinding<int>(kGroup, "setMaxStops", OnSetMaxStops));
             AddBinding(new TriggerBinding<int>(kGroup, "setMaxRouteLength", OnSetMaxRouteLength));
@@ -311,6 +317,29 @@ namespace AutoBusLines
             m_EnablePlanMode.Update(value);
         }
 
+        private void OnSetExcludeDeadEnds(bool value)
+        {
+            if (Mod.setting != null)
+            {
+                Mod.setting.ExcludeDeadEnds = value;
+                Mod.setting.Apply();
+            }
+            m_ExcludeDeadEnds.Update(value);
+            log.Info($"Set ExcludeDeadEnds: {value}");
+        }
+
+        private void OnSetDeadEndThreshold(int value)
+        {
+            value = Math.Max(50, Math.Min(2000, value));
+            if (Mod.setting != null)
+            {
+                Mod.setting.DeadEndDistanceThreshold = value;
+                Mod.setting.Apply();
+            }
+            m_DeadEndDistanceThreshold.Update(value);
+            log.Info($"Set DeadEndDistanceThreshold: {value}m");
+        }
+
         private void OnSetMinStops(int value)
         {
             value = Math.Max(2, Math.Min(30, value));
@@ -449,6 +478,8 @@ namespace AutoBusLines
             }
 
             m_EnablePlanMode?.Update(s.EnablePlanMode);
+            m_ExcludeDeadEnds?.Update(s.ExcludeDeadEnds);
+            m_DeadEndDistanceThreshold?.Update(s.DeadEndDistanceThreshold);
             m_MinStopsPerLine?.Update(s.MinStopsPerLine);
             m_MaxStopsPerLine?.Update(s.MaxStopsPerLine);
             m_MaxRouteLength?.Update(s.MaxRouteLength);

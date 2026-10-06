@@ -144,6 +144,10 @@ namespace AutoBusLines
             public float CorridorLength = 0f;
             public bool IsSuppressed = false;
             public bool IsSideStreet = false;
+            public int StartDegree;
+            public int EndDegree;
+            public bool IsDeadEnd;
+            public float DeadEndBranchLength = 0f;
             public float3 StartPosition;
             public float3 EndPosition;
             public float3 StartTangent;
@@ -338,6 +342,9 @@ namespace AutoBusLines
             _requestedSeed = seedOffset;
             _isPlanRequest = true;
             _hasRun = false;
+            _depotFinder?.Reset();
+            _roadScanner?.Reset();
+            _roadAssigner?.Reset();
         }
 
         public void RequestBuildSelectedPlan()
@@ -1493,11 +1500,8 @@ namespace AutoBusLines
             if (_roadScanner == null) _roadScanner = World.GetOrCreateSystemManaged<RoadNetworkScanner>();
             if (_roadAssigner == null) _roadAssigner = World.GetOrCreateSystemManaged<RoadDepotAssigner>();
 
-            if (_depotFinder.AllHubs.Length == 0)
-                _depotFinder.ScanNow();
-
-            if (_roadScanner.RoadSegments.Length == 0)
-                _roadScanner.ScanNow();
+            _depotFinder.ScanNow();
+            _roadScanner.ScanNow();
 
             if (_depotFinder.AllHubs.Length > 0 && _roadScanner.RoadSegments.Length > 0)
                 _roadAssigner.AssignNow();
@@ -1766,11 +1770,29 @@ namespace AutoBusLines
                 return b.TotalLength.CompareTo(a.TotalLength);
             });
 
+            bool excludeDeadEnds = Mod.setting != null ? Mod.setting.ExcludeDeadEnds : true;
+            float deadEndThreshold = Mod.setting != null ? (float)Mod.setting.DeadEndDistanceThreshold : 500f;
+
             for (int s = 0; s < blockSpans.Count; s++)
             {
                 var span = blockSpans[s];
                 if (span.TotalLength < minSpanLength)
                     continue;
+
+                // Skip cul-de-sacs and dead-end roads unless they exceed the user's distance threshold
+                if (excludeDeadEnds && span.IsDeadEnd)
+                {
+                    float effectiveLength = math.max(span.DeadEndBranchLength, span.TotalLength);
+                    if (effectiveLength < deadEndThreshold)
+                    {
+                        log.Info($"[ExcludeDeadEnds] Skipping stop on short dead-end span #{span.SpanId}: branch={effectiveLength:F1}m (span={span.TotalLength:F1}m) (< threshold {deadEndThreshold:F0}m)");
+                        continue;
+                    }
+                    else
+                    {
+                        log.Info($"[ExcludeDeadEnds] Allowing stop on long dead-end span #{span.SpanId}: branch={effectiveLength:F1}m (span={span.TotalLength:F1}m) (>= threshold {deadEndThreshold:F0}m)");
+                    }
+                }
 
                 // Long connector spans connecting directly to an elevated bridge deck:
                 // Use wider spacing (450m) so long approach links don't spam 6+ stops in empty terrain,
@@ -3054,6 +3076,8 @@ namespace AutoBusLines
                     continue;
                 }
 
+                bool isDeadEnd = (startDegree <= 1 || endDegree <= 1);
+
                 // Safe Center-Edge Stop Placement:
                 // NEVER place stops near edge boundary nodes or intersection conflict zones.
                 // A bus stopping box requires 15m vehicle length + 5m clearance.
@@ -3185,6 +3209,10 @@ namespace AutoBusLines
                     Edges = spanEdges,
                     StartNode = currentStartNode,
                     EndNode = currentEndNode,
+                    StartDegree = startDegree,
+                    EndDegree = endDegree,
+                    IsDeadEnd = isDeadEnd,
+                    DeadEndBranchLength = isDeadEnd ? totalLength : 0f,
                     TotalLength = totalLength,
                     MidPosition = midPos,
                     MidTangent = midTan,
@@ -3257,7 +3285,147 @@ namespace AutoBusLines
                 }
             }
 
-            log.Info($"Block Spans Built: {blockSpans.Count} spans from {_roadScanner.RoadSegments.Length} edges ({mergedDegree2Count} degree-2 pass-through splits merged)");
+            // Propagate dead-end status along branching cul-de-sacs (stems leading only to dead ends)
+            bool deadEndPropagated = true;
+            int pass = 0;
+            while (deadEndPropagated && pass < 8)
+            {
+                deadEndPropagated = false;
+                pass++;
+
+                var nodeSpanMap = new Dictionary<Entity, List<BlockSpan>>();
+                for (int s = 0; s < blockSpans.Count; s++)
+                {
+                    var sp = blockSpans[s];
+                    if (sp.StartNode != Entity.Null)
+                    {
+                        if (!nodeSpanMap.TryGetValue(sp.StartNode, out var list))
+                        {
+                            list = new List<BlockSpan>();
+                            nodeSpanMap[sp.StartNode] = list;
+                        }
+                        list.Add(sp);
+                    }
+                    if (sp.EndNode != Entity.Null)
+                    {
+                        if (!nodeSpanMap.TryGetValue(sp.EndNode, out var list))
+                        {
+                            list = new List<BlockSpan>();
+                            nodeSpanMap[sp.EndNode] = list;
+                        }
+                        list.Add(sp);
+                    }
+                }
+
+                foreach (var kvp in nodeSpanMap)
+                {
+                    var conns = kvp.Value;
+                    if (conns.Count < 2) continue;
+
+                    int nonDeadEndCount = 0;
+                    BlockSpan candidateStem = null;
+                    float maxDeadEndChildBranch = 0f;
+                    for (int c = 0; c < conns.Count; c++)
+                    {
+                        if (!conns[c].IsDeadEnd)
+                        {
+                            nonDeadEndCount++;
+                            candidateStem = conns[c];
+                        }
+                        else
+                        {
+                            maxDeadEndChildBranch = math.max(maxDeadEndChildBranch, conns[c].DeadEndBranchLength);
+                        }
+                    }
+
+                    if (nonDeadEndCount == 1 && candidateStem != null)
+                    {
+                        candidateStem.IsDeadEnd = true;
+                        float combinedBranch = candidateStem.TotalLength + maxDeadEndChildBranch;
+                        candidateStem.DeadEndBranchLength = math.max(candidateStem.DeadEndBranchLength, combinedBranch);
+
+                        // Propagate total combined branch length to all connected dead-end children on this branch
+                        for (int c = 0; c < conns.Count; c++)
+                        {
+                            if (conns[c] != candidateStem)
+                            {
+                                conns[c].DeadEndBranchLength = math.max(conns[c].DeadEndBranchLength, candidateStem.DeadEndBranchLength);
+                            }
+                        }
+                        deadEndPropagated = true;
+                    }
+                }
+            }
+
+            // Flood-fill maximum branch length across all connected dead-end spans in each cul-de-sac system
+            // so every span along a branching cul-de-sac shares the full branch distance to the main network
+            var deadEndNodeSpanMap = new Dictionary<Entity, List<BlockSpan>>();
+            for (int s = 0; s < blockSpans.Count; s++)
+            {
+                var sp = blockSpans[s];
+                if (!sp.IsDeadEnd) continue;
+                if (sp.StartNode != Entity.Null)
+                {
+                    if (!deadEndNodeSpanMap.TryGetValue(sp.StartNode, out var list))
+                    {
+                        list = new List<BlockSpan>();
+                        deadEndNodeSpanMap[sp.StartNode] = list;
+                    }
+                    list.Add(sp);
+                }
+                if (sp.EndNode != Entity.Null)
+                {
+                    if (!deadEndNodeSpanMap.TryGetValue(sp.EndNode, out var list))
+                    {
+                        list = new List<BlockSpan>();
+                        deadEndNodeSpanMap[sp.EndNode] = list;
+                    }
+                    list.Add(sp);
+                }
+            }
+
+            bool branchLengthExpanded = true;
+            int expandPass = 0;
+            while (branchLengthExpanded && expandPass < 10)
+            {
+                branchLengthExpanded = false;
+                expandPass++;
+                foreach (var kvp in deadEndNodeSpanMap)
+                {
+                    var conns = kvp.Value;
+                    float maxBranchInNode = 0f;
+                    for (int c = 0; c < conns.Count; c++)
+                    {
+                        if (conns[c].DeadEndBranchLength > maxBranchInNode)
+                            maxBranchInNode = conns[c].DeadEndBranchLength;
+                    }
+
+                    if (maxBranchInNode > 0f)
+                    {
+                        for (int c = 0; c < conns.Count; c++)
+                        {
+                            if (conns[c].DeadEndBranchLength < maxBranchInNode)
+                            {
+                                conns[c].DeadEndBranchLength = maxBranchInNode;
+                                branchLengthExpanded = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            int deadEndSpanCount = 0;
+            float maxBranchLength = 0f;
+            for (int s = 0; s < blockSpans.Count; s++)
+            {
+                if (blockSpans[s].IsDeadEnd)
+                {
+                    deadEndSpanCount++;
+                    maxBranchLength = math.max(maxBranchLength, blockSpans[s].DeadEndBranchLength);
+                }
+            }
+
+            log.Info($"Block Spans Built: {blockSpans.Count} spans ({deadEndSpanCount} dead-end/cul-de-sac spans identified, longest branch {maxBranchLength:F1}m) from {_roadScanner.RoadSegments.Length} edges ({mergedDegree2Count} degree-2 pass-through splits merged)");
             return blockSpans;
         }
 

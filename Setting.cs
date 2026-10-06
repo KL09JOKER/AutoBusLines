@@ -56,6 +56,12 @@ namespace AutoBusLines
         [SettingsUIHidden]
         public bool EnablePlanMode { get; set; } = true;
 
+        [SettingsUIHidden]
+        public bool ExcludeDeadEnds { get; set; } = true;
+
+        [SettingsUIHidden]
+        public int DeadEndDistanceThreshold { get; set; } = 300;
+
         public static readonly List<string> DiscoveredStopPrefabNames = new List<string>();
         public static readonly Dictionary<string, string> DiscoveredStopPrefabIcons = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         public static int DiscoveredStopPrefabVersion = 1;
@@ -162,6 +168,8 @@ namespace AutoBusLines
         public override void SetDefaults()
         {
             EnablePlanMode = true;
+            ExcludeDeadEnds = true;
+            DeadEndDistanceThreshold = 300;
             LineColoring = LineColorMode.PerStation;
             SelectedStopPrefab = "All";
             MinStopsPerLine = 6;
