@@ -2,7 +2,7 @@
   position: fixed !important;
   z-index: 50 !important;
   pointer-events: auto !important;
-  width: 580rem;
+  width: 600rem;
   height: 720rem;
   max-height: 85vh;
   background-color: rgba(20, 28, 42, 0.98);
@@ -894,16 +894,16 @@
   display: flex;
   flex-direction: row;
   flex-wrap: wrap;
-  justify-content: space-between;
+  justify-content: flex-start;
+  gap: 8rem;
   width: 100%;
   box-sizing: border-box;
-  row-gap: 8rem;
 }
 
 .prefabCard {
-  width: 125rem;
-  min-width: 125rem;
-  max-width: 125rem;
+  width: 118rem;
+  min-width: 118rem;
+  max-width: 118rem;
   height: 195rem;
   min-height: 195rem;
   max-height: 195rem;

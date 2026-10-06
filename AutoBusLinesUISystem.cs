@@ -87,6 +87,19 @@ namespace AutoBusLines
             log.Info("AutoBusLinesUISystem created and UI bindings registered successfully!");
         }
 
+        protected override void OnGameLoaded(Colossal.Serialization.Entities.Context serializationContext)
+        {
+            base.OnGameLoaded(serializationContext);
+            m_PlanStatus.Update("idle");
+            m_PlanJson.Update("[]");
+            m_StatusMessage.Update("");
+            m_PlanSeed.Update(0);
+            m_PanelVisible.Update(false);
+            HoveredRouteId = 0;
+            HoveredStopIndex = -1;
+            PlanRouteOverlaySystem.ClearCache();
+        }
+
         public static int HoveredRouteId { get; set; } = 0;
         public static int HoveredStopIndex { get; set; } = -1;
 

@@ -403,10 +403,31 @@ namespace AutoBusLines
             return false;
         }
 
+        protected override void OnGameLoaded(Colossal.Serialization.Entities.Context serializationContext)
+        {
+            base.OnGameLoaded(serializationContext);
+            Reset();
+        }
+
         public void Reset()
         {
             _hasRun = false;
             _lastLoggedHubCount = -1;
+            if (BusDepots.IsCreated)
+                BusDepots.Clear();
+            if (BusStations.IsCreated)
+                BusStations.Clear();
+            if (AllHubs.IsCreated)
+                AllHubs.Clear();
+            if (StationPlatformStops.IsCreated)
+                StationPlatformStops.Clear();
+            StationToPlatforms?.Clear();
+        }
+
+        public void ScanNow()
+        {
+            _hasRun = false;
+            OnUpdate();
         }
 
         protected override void OnDestroy()

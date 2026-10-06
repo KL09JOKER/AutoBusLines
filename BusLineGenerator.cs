@@ -60,7 +60,7 @@ namespace AutoBusLines
         private EntityQuery _busLinePrefabQuery;
         private EntityQuery _existingBusStopQuery;
 
-        private const float HUB_EXCLUSION_RADIUS = 60f;             // Exclusion radius around stations & depots (passengers use station bays)
+        private const float HUB_EXCLUSION_RADIUS = 120f;            // Exclusion radius around stations & depots (passengers use station bays)
         public const float DEFAULT_MAX_ROUTE_LENGTH = 15000f;       // Default maximum bus loop length: 15 km
         private const int MIN_STOPS_PER_LINE = 6;                   // Minimum stops per bus loop
         private const int MAX_STOPS_PER_LINE = 16;                  // Maximum stops per bus loop
@@ -228,6 +228,83 @@ namespace AutoBusLines
             log.Info("BusLineGenerator (Balanced 1-Stop-Per-Block Corridor-First System) created");
         }
 
+        protected override void OnGameLoaded(Colossal.Serialization.Entities.Context serializationContext)
+        {
+            base.OnGameLoaded(serializationContext);
+            ResetOnSaveLoad();
+            CleanLegacySubObjectStops();
+        }
+
+        public void ResetOnSaveLoad()
+        {
+            _hasRun = false;
+            _isManualRequest = false;
+            _isPlanRequest = false;
+            _isBuildPlanRequest = false;
+            _isDiscardPlanRequest = false;
+            _isRepairRequested = false;
+            _generationStage = GenerationStage.Idle;
+            _waitFrameCounter = 0;
+            _currentTourIndex = 0;
+            _activePlan = null;
+            _currentPlanSeed = 0;
+            _plannedTours.Clear();
+            _plannedTourColors?.Clear();
+
+            _depotFinder?.Reset();
+            _roadScanner?.Reset();
+            _roadAssigner?.Reset();
+        }
+
+        private void CleanLegacySubObjectStops()
+        {
+            try
+            {
+                var stopQuery = GetEntityQuery(new EntityQueryDesc
+                {
+                    All = new ComponentType[]
+                    {
+                        ComponentType.ReadOnly<Game.Routes.BusStop>(),
+                        ComponentType.ReadOnly<Game.Objects.Attached>(),
+                    },
+                    None = new ComponentType[]
+                    {
+                        ComponentType.ReadOnly<Deleted>(),
+                        ComponentType.ReadOnly<Game.Tools.Temp>(),
+                    }
+                });
+
+                if (stopQuery.IsEmptyIgnoreFilter)
+                    return;
+
+                var stopEntities = stopQuery.ToEntityArray(Allocator.Temp);
+                var attachedArray = stopQuery.ToComponentDataArray<Game.Objects.Attached>(Allocator.Temp);
+
+                var cleanedRoads = new HashSet<Entity>();
+
+                for (int i = 0; i < stopEntities.Length; i++)
+                {
+                    var roadEntity = attachedArray[i].m_Parent;
+                    if (roadEntity != Entity.Null && EntityManager.Exists(roadEntity) && cleanedRoads.Add(roadEntity))
+                    {
+                        ClearRoadDeadEndNotifications(roadEntity);
+                    }
+                }
+
+                stopEntities.Dispose();
+                attachedArray.Dispose();
+
+                if (cleanedRoads.Count > 0)
+                {
+                    log.Info($"CleanLegacySubObjectStops: Cleaned legacy SubObject entries and unblocked road lanes on {cleanedRoads.Count} parent roads.");
+                }
+            }
+            catch (Exception ex)
+            {
+                log.Warn($"CleanLegacySubObjectStops encountered non-critical issue: {ex.Message}");
+            }
+        }
+
         public void RequestGeneration()
         {
             // Wipe previously generated bus lines and roadside stops so new settings/density apply cleanly
@@ -260,6 +337,7 @@ namespace AutoBusLines
         {
             _requestedSeed = seedOffset;
             _isPlanRequest = true;
+            _hasRun = false;
         }
 
         public void RequestBuildSelectedPlan()
@@ -661,7 +739,7 @@ namespace AutoBusLines
                                 EntityManager.AddComponentData(stopEntity, default(Updated));
                                 EntityManager.AddComponentData(stopEntity, default(BatchesUpdated));
 
-                                if (roadOwner != Entity.Null && EntityManager.HasComponent<Edge>(roadOwner))
+                                if (roadOwner != Entity.Null && EntityManager.Exists(roadOwner) && EntityManager.HasComponent<Edge>(roadOwner))
                                 {
                                     ClearRoadDeadEndNotifications(roadOwner);
                                 }
@@ -959,7 +1037,7 @@ namespace AutoBusLines
 
             log.Info($"=== Repair Complete: Nudged {stopsNudged} stops, reset {segmentsToReset.Count} segments across {brokenRoutesFound} routes. Re-enqueued pathfinding. ===");
 
-            // 4. Reset RouteInspector so it inspects repaired routes after simulation runs
+            // Reset RouteInspector so it inspects repaired routes after simulation runs
             var inspector = World.GetExistingSystemManaged<RouteInspector>();
             if (inspector != null)
             {
@@ -978,6 +1056,9 @@ namespace AutoBusLines
             var attached = EntityManager.GetComponentData<Attached>(stopEntity);
             var roadEntity = attached.m_Parent;
             if (roadEntity == Entity.Null || !EntityManager.Exists(roadEntity) || !EntityManager.HasComponent<Curve>(roadEntity))
+                return false;
+
+            if (IsDrawbridge(roadEntity))
                 return false;
 
             var roadCurve = EntityManager.GetComponentData<Curve>(roadEntity);
@@ -1073,7 +1154,7 @@ namespace AutoBusLines
             if (!EntityManager.HasComponent<BatchesUpdated>(stopEntity))
                 EntityManager.AddComponentData(stopEntity, default(BatchesUpdated));
 
-            // Clean up any legacy SubObject / DeadEnd warnings on parent road
+            // Clean up any legacy DeadEnd warnings on parent road
             ClearRoadDeadEndNotifications(roadEntity);
 
             // Update all connected waypoints
@@ -1103,21 +1184,20 @@ namespace AutoBusLines
             if (roadEntity == Entity.Null || !EntityManager.Exists(roadEntity))
                 return;
 
-            // Remove legacy SubObject entries on roadEntity
+            // Clean up any incorrect SubObject buffer entries on roadEntity
             if (EntityManager.HasBuffer<Game.Objects.SubObject>(roadEntity))
             {
                 var subObjs = EntityManager.GetBuffer<Game.Objects.SubObject>(roadEntity);
                 for (int so = subObjs.Length - 1; so >= 0; so--)
                 {
                     var sub = subObjs[so].m_SubObject;
-                    if (EntityManager.HasComponent<Game.Routes.BusStop>(sub) || EntityManager.HasComponent<Game.Routes.TransportStop>(sub))
+                    if (EntityManager.Exists(sub) && (EntityManager.HasComponent<Game.Routes.BusStop>(sub) || EntityManager.HasComponent<Game.Routes.TransportStop>(sub)))
                     {
                         subObjs.RemoveAt(so);
                     }
                 }
             }
 
-            // Remove legacy SubObjectsUpdated tag if present
             if (EntityManager.HasComponent<SubObjectsUpdated>(roadEntity))
             {
                 EntityManager.RemoveComponent<SubObjectsUpdated>(roadEntity);
@@ -1409,11 +1489,47 @@ namespace AutoBusLines
 
         private void ExecuteGeneration(bool planOnly, int seedOffset, bool autoOpenPanel)
         {
+            if (_depotFinder == null) _depotFinder = World.GetOrCreateSystemManaged<DepotFinderSystem>();
+            if (_roadScanner == null) _roadScanner = World.GetOrCreateSystemManaged<RoadNetworkScanner>();
+            if (_roadAssigner == null) _roadAssigner = World.GetOrCreateSystemManaged<RoadDepotAssigner>();
+
+            if (_depotFinder.AllHubs.Length == 0)
+                _depotFinder.ScanNow();
+
+            if (_roadScanner.RoadSegments.Length == 0)
+                _roadScanner.ScanNow();
+
+            if (_depotFinder.AllHubs.Length > 0 && _roadScanner.RoadSegments.Length > 0)
+                _roadAssigner.AssignNow();
+
             var roadToHub = _roadAssigner.GetRoadToDepotMap();
-            if (_depotFinder.AllHubs.Length == 0 ||
-                _roadScanner.RoadSegments.Length == 0 ||
-                roadToHub.Count == 0)
+
+            if (_depotFinder.AllHubs.Length == 0)
+            {
+                log.Warn("ExecuteGeneration: No bus depots or stations found in city.");
+                _hasRun = true;
+                _isManualRequest = false;
+                AutoBusLinesUISystem.Instance?.SetPlanStatus("idle", "No Bus Depot or Bus Station found! Please build at least one Bus Depot or Bus Station first.");
                 return;
+            }
+
+            if (_roadScanner.RoadSegments.Length == 0)
+            {
+                log.Warn("ExecuteGeneration: No municipal paved roads found in city.");
+                _hasRun = true;
+                _isManualRequest = false;
+                AutoBusLinesUISystem.Instance?.SetPlanStatus("idle", "No municipal paved roads found in city.");
+                return;
+            }
+
+            if (roadToHub.Count == 0)
+            {
+                log.Warn("ExecuteGeneration: Could not map any roads to transit hubs.");
+                _hasRun = true;
+                _isManualRequest = false;
+                AutoBusLinesUISystem.Instance?.SetPlanStatus("idle", "Could not connect city roads to available transit depots.");
+                return;
+            }
 
             log.Info($"=== Starting AutoBusLines {(planOnly ? "Plan Mode Preview" : "Direct Generation")} (Variant #{seedOffset + 1}) ===");
 
@@ -1624,14 +1740,46 @@ namespace AutoBusLines
             int totalStopsPlaced = 0;
             int existingStopsReused = 0;
 
-            // Sort spans so arterial/longer spans are processed first, then neighborhood side streets
-            blockSpans.Sort((a, b) => b.TotalLength.CompareTo(a.TotalLength));
+            // Precompute bridge nodes to identify long bridge approach connector spans
+            var bridgeNodes = new HashSet<Entity>();
+            if (_roadScanner != null && _roadScanner.DrivableSegments.IsCreated)
+            {
+                for (int i = 0; i < _roadScanner.DrivableSegments.Length; i++)
+                {
+                    var e = _roadScanner.DrivableSegments[i];
+                    if (IsElevatedOrBridge(e) && EntityManager.HasComponent<Edge>(e))
+                    {
+                        var edge = EntityManager.GetComponentData<Edge>(e);
+                        if (edge.m_Start != Entity.Null) bridgeNodes.Add(edge.m_Start);
+                        if (edge.m_End != Entity.Null) bridgeNodes.Add(edge.m_End);
+                    }
+                }
+            }
+
+            // Sort spans so major arterial corridors are processed first, then neighborhood side streets.
+            // Sorting by CorridorLength first ensures dominant avenues receive clean transit stops,
+            // while minor perpendicular side streets within servedRadius are properly served without cluttering "the sides".
+            blockSpans.Sort((a, b) =>
+            {
+                int cmp = b.CorridorLength.CompareTo(a.CorridorLength);
+                if (cmp != 0) return cmp;
+                return b.TotalLength.CompareTo(a.TotalLength);
+            });
 
             for (int s = 0; s < blockSpans.Count; s++)
             {
                 var span = blockSpans[s];
                 if (span.TotalLength < minSpanLength)
                     continue;
+
+                // Long connector spans connecting directly to an elevated bridge deck:
+                // Use wider spacing (450m) so long approach links don't spam 6+ stops in empty terrain,
+                // while still maintaining stepping-stone connectivity for bus lines across the river.
+                bool touchesBridge = (span.StartNode != Entity.Null && bridgeNodes.Contains(span.StartNode)) ||
+                                     (span.EndNode != Entity.Null && bridgeNodes.Contains(span.EndNode));
+                float effectiveSpacing = (touchesBridge && span.TotalLength >= 350f)
+                    ? math.max(targetSpacing * 2.2f, 450f)
+                    : targetSpacing;
 
                 // Check exclusion radius around hubs (stations & depots)
                 bool isNearHub = false;
@@ -1663,12 +1811,16 @@ namespace AutoBusLines
                     });
 
                     // For short to moderate spans, the reused stop covers this span
-                    if (span.TotalLength <= targetSpacing * 1.6f)
+                    if (span.TotalLength <= effectiveSpacing * 1.6f)
                         continue;
                 }
 
-                // Determine how many stops this span should receive based on targetSpacing
-                int stopsToPlace = math.max(1, (int)math.round(span.TotalLength / targetSpacing));
+                // Determine how many stops this span should receive based on effectiveSpacing
+                int stopsToPlace = math.max(1, (int)math.round(span.TotalLength / effectiveSpacing));
+                if (touchesBridge && span.TotalLength >= 350f)
+                {
+                    stopsToPlace = math.min(stopsToPlace, 2); // Cap long bridge approaches at at most 2 stops
+                }
 
                 for (int i = 0; i < stopsToPlace; i++)
                 {
@@ -1683,11 +1835,38 @@ namespace AutoBusLines
                         edgeT = span.MidT;
                         roadPos = span.MidPosition;
                         roadTan = span.MidTangent;
+
+                        // If the span's midpoint edge happens to be a bridge or drawbridge, search for an alternative non-bridge edge in the span
+                        if (IsElevatedOrBridge(roadEdge))
+                        {
+                            bool foundAlternative = false;
+                            for (int e = 0; e < span.Edges.Count; e++)
+                            {
+                                var candEdge = span.Edges[e].EdgeEntity;
+                                if (!IsElevatedOrBridge(candEdge) && EntityManager.HasComponent<Curve>(candEdge))
+                                {
+                                    var candCurve = EntityManager.GetComponentData<Curve>(candEdge);
+                                    roadEdge = candEdge;
+                                    edgeT = 0.5f;
+                                    roadPos = MathUtils.Position(candCurve.m_Bezier, 0.5f);
+                                    float3 cTan = MathUtils.Tangent(candCurve.m_Bezier, 0.5f);
+                                    if (span.Edges[e].IsReversed) cTan = -cTan;
+                                    roadTan = math.normalizesafe(cTan, new float3(0, 0, 1));
+                                    foundAlternative = true;
+                                    break;
+                                }
+                            }
+                            if (!foundAlternative)
+                                continue; // Entire span consists of bridge edges; skip placing stops on bridge deck
+                        }
                     }
                     else
                     {
                         float targetDist = (i + 1.0f) / (stopsToPlace + 1.0f) * span.TotalLength;
                         if (!TryGetSpanPointAtDistance(span, targetDist, out roadEdge, out edgeT, out roadPos, out roadTan))
+                            continue;
+
+                        if (IsElevatedOrBridge(roadEdge))
                             continue;
                     }
 
@@ -2005,6 +2184,8 @@ namespace AutoBusLines
             Dictionary<Entity, List<PlacedStop>> existingStopsByRoad, out PlacedStop foundStop)
         {
             foundStop = default;
+            if (IsDrawbridge(roadEntity))
+                return false;
 
             // 1. Check if attached road directly matches
             if (existingStopsByRoad.ContainsKey(roadEntity) && existingStopsByRoad[roadEntity].Count > 0)
@@ -2099,6 +2280,102 @@ namespace AutoBusLines
             return false;
         }
 
+        private bool IsDrawbridge(Entity roadEntity)
+        {
+            if (roadEntity == Entity.Null || !EntityManager.Exists(roadEntity))
+                return false;
+
+            // 1. Direct PrefabRef check on roadEntity for MoveableBridgeData component
+            if (EntityManager.HasComponent<PrefabRef>(roadEntity))
+            {
+                var prefabRef = EntityManager.GetComponentData<PrefabRef>(roadEntity);
+                var prefab = prefabRef.m_Prefab;
+                if (prefab != Entity.Null && EntityManager.Exists(prefab))
+                {
+                    if (EntityManager.HasComponent<Game.Prefabs.MoveableBridgeData>(prefab))
+                        return true;
+
+                    if (_prefabSystem != null)
+                    {
+                        string pName = _prefabSystem.GetPrefabName(prefab);
+                        if (IsDrawbridgeName(pName))
+                            return true;
+                    }
+                }
+            }
+
+            // 2. Check SubObjects on the roadEntity (movable bridge deck / lifting mechanisms)
+            if (EntityManager.HasBuffer<Game.Objects.SubObject>(roadEntity))
+            {
+                var subObjects = EntityManager.GetBuffer<Game.Objects.SubObject>(roadEntity);
+                for (int s = 0; s < subObjects.Length; s++)
+                {
+                    var sub = subObjects[s].m_SubObject;
+                    if (sub != Entity.Null && EntityManager.Exists(sub) && EntityManager.HasComponent<PrefabRef>(sub))
+                    {
+                        var subPrefab = EntityManager.GetComponentData<PrefabRef>(sub).m_Prefab;
+                        if (subPrefab != Entity.Null && EntityManager.Exists(subPrefab))
+                        {
+                            if (EntityManager.HasComponent<Game.Prefabs.MoveableBridgeData>(subPrefab))
+                                return true;
+
+                            if (_prefabSystem != null && IsDrawbridgeName(_prefabSystem.GetPrefabName(subPrefab)))
+                                return true;
+                        }
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private bool IsElevatedOrBridge(Entity roadEntity)
+        {
+            if (roadEntity == Entity.Null || !EntityManager.Exists(roadEntity))
+                return false;
+
+            if (IsDrawbridge(roadEntity))
+                return true;
+
+            if (EntityManager.HasComponent<Game.Net.Composition>(roadEntity))
+            {
+                var comp = EntityManager.GetComponentData<Game.Net.Composition>(roadEntity);
+                if (comp.m_Edge != Entity.Null && EntityManager.HasComponent<Game.Prefabs.NetCompositionData>(comp.m_Edge))
+                {
+                    var netComp = EntityManager.GetComponentData<Game.Prefabs.NetCompositionData>(comp.m_Edge);
+                    if ((netComp.m_Flags.m_General & (CompositionFlags.General.Elevated | CompositionFlags.General.Tunnel)) != 0)
+                        return true;
+                }
+            }
+
+            if (EntityManager.HasComponent<PrefabRef>(roadEntity))
+            {
+                var prefab = EntityManager.GetComponentData<PrefabRef>(roadEntity).m_Prefab;
+                if (prefab != Entity.Null && _prefabSystem != null)
+                {
+                    string name = _prefabSystem.GetPrefabName(prefab);
+                    if (!string.IsNullOrEmpty(name) && name.IndexOf("Bridge", StringComparison.OrdinalIgnoreCase) >= 0)
+                        return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool IsDrawbridgeName(string name)
+        {
+            if (string.IsNullOrEmpty(name))
+                return false;
+
+            return name.IndexOf("Drawbridge", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.IndexOf("MoveableBridge", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.IndexOf("MovableBridge", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.IndexOf("OpeningBridge", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.IndexOf("Bascule", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.IndexOf("LiftBridge", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.IndexOf("SwingBridge", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
         private bool TryGetSpanPointAtDistance(BlockSpan span, float targetDist, out Entity edgeEntity, out float t, out float3 pos, out float3 tangent)
         {
             edgeEntity = Entity.Null;
@@ -2168,6 +2445,9 @@ namespace AutoBusLines
                                                  out PlacedStop placedStop)
         {
             placedStop = default;
+            if (IsElevatedOrBridge(roadEntity))
+                return false;
+
             bool isReverseSide = (spanOrderInCorridor % 2 != 0);
 
             float3 forward = corridorTan;
@@ -2309,6 +2589,9 @@ namespace AutoBusLines
         private bool TryCreateBusStopEntity(Entity roadEntity, float t, float3 pos, float3 forward, Entity hubEntity, int corridorIndex, int spanOrderInCorridor, bool isOutbound, Entity busStopPrefabEntity, out PlacedStop stop)
         {
             stop = default;
+            if (IsElevatedOrBridge(roadEntity))
+                return false;
+
             quaternion rot = quaternion.LookRotationSafe(forward, new float3(0, 1, 0));
 
             if (!EntityManager.HasComponent<ObjectData>(busStopPrefabEntity))
@@ -2397,7 +2680,7 @@ namespace AutoBusLines
             if (!EntityManager.HasComponent<BatchesUpdated>(stopEntity))
                 EntityManager.AddComponentData(stopEntity, default(BatchesUpdated));
 
-            // 7. Clean up any legacy SubObject / DeadEnd warnings on roadEntity
+            // 7. Clean up any transient DeadEnd warnings on roadEntity
             ClearRoadDeadEndNotifications(roadEntity);
 
             stop = new PlacedStop
@@ -2693,6 +2976,10 @@ namespace AutoBusLines
                     if (!EntityManager.HasComponent<Edge>(nextEdge) || !EntityManager.HasComponent<Curve>(nextEdge))
                         break;
 
+                    // Do not merge across bridge/elevated boundary so land roads keep their own spans
+                    if (IsElevatedOrBridge(currentEdge) != IsElevatedOrBridge(nextEdge))
+                        break;
+
                     var nextEdgeData = EntityManager.GetComponentData<Edge>(nextEdge);
                     var nextCurve = EntityManager.GetComponentData<Curve>(nextEdge);
                     float nextLen = MathUtils.Length(nextCurve.m_Bezier);
@@ -2731,6 +3018,10 @@ namespace AutoBusLines
                     if (prevEdge == Entity.Null || visitedEdges.Contains(prevEdge))
                         break;
                     if (!EntityManager.HasComponent<Edge>(prevEdge) || !EntityManager.HasComponent<Curve>(prevEdge))
+                        break;
+
+                    // Do not merge across bridge/elevated boundary so land roads keep their own spans
+                    if (IsElevatedOrBridge(currentEdge) != IsElevatedOrBridge(prevEdge))
                         break;
 
                     var prevEdgeData = EntityManager.GetComponentData<Edge>(prevEdge);
@@ -3561,9 +3852,13 @@ namespace AutoBusLines
             nodePositions = new Dictionary<Entity, float3>();
             _nodeDegree = new Dictionary<Entity, int>();
 
-            for (int i = 0; i < _roadScanner.RoadSegments.Length; i++)
+            var segments = (_roadScanner != null && _roadScanner.DrivableSegments.IsCreated && _roadScanner.DrivableSegments.Length > 0)
+                ? _roadScanner.DrivableSegments
+                : _roadScanner.RoadSegments;
+
+            for (int i = 0; i < segments.Length; i++)
             {
-                var roadEnt = _roadScanner.RoadSegments[i];
+                var roadEnt = segments[i];
                 if (!EntityManager.HasComponent<Edge>(roadEnt) || !EntityManager.HasComponent<Curve>(roadEnt))
                     continue;
 

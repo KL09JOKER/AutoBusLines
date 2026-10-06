@@ -42,6 +42,10 @@
 		<None Remove="auto-bus-lines-ui\**" />
 		<EmbeddedResource Remove="auto-bus-lines-ui\**" />
 
+		<Compile Remove="scratch\**" />
+		<None Remove="scratch\**" />
+		<EmbeddedResource Remove="scratch\**" />
+
 	</ItemGroup>
 
 	<ItemGroup>

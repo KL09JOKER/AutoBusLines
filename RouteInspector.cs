@@ -26,6 +26,12 @@ namespace AutoBusLines
 
         private int _frameDelay = 0;
 
+        protected override void OnGameLoaded(Colossal.Serialization.Entities.Context serializationContext)
+        {
+            base.OnGameLoaded(serializationContext);
+            Reset();
+        }
+
         public void Reset()
         {
             _hasInspected = false;

@@ -43,10 +43,10 @@ namespace AutoBusLines
             public bool Closed;
         }
 
-        private const float MAX_AVG_STOP_SPACING = 800f;    // a trunk line must average at least one stop per this many metres of loop
-        private const float FEEDER_CLOSING_LIMIT = 2000f;   // longest stop-less drive allowed to close a feeder loop
+        private const float MAX_AVG_STOP_SPACING = 1500f;   // a trunk line must average at least one stop per this many metres of loop
+        private const float FEEDER_CLOSING_LIMIT = 4000f;   // longest stop-less drive allowed to close a feeder loop
         private const int LASTMILE_CANDIDATES = 8;        // insertion points re-checked against the real road graph
-        private const float LASTMILE_MAX_DETOUR = 1500f;  // never wedge a stop in if it costs the line more than this
+        private const float LASTMILE_MAX_DETOUR = 2500f;  // never wedge a stop in if it costs the line more than this
 
         private struct InsertionCandidate
         {
@@ -444,25 +444,31 @@ namespace AutoBusLines
             PlanLastMileInsertions(ctx);
             PlanResidualLoops(ctx);
             ConsolidateSmallTours(ctx);
+            PlanUnservedClusters(ctx);
 
-            // Fallback: only create fallback tour if there are actual unserved stops
-            int unservedCount = 0;
+            // Fallback: create cluster tours for unserved stops so that isolated areas across bridges are never left out
+            var remainingUnserved = new List<PlacedStop>();
             for (int i = 0; i < allGlobalStops.Count; i++)
             {
                 if (!allGlobalStops[i].IsStationBay && !ctx.Served.Contains(allGlobalStops[i].StopEntity))
-                    unservedCount++;
+                    remainingUnserved.Add(allGlobalStops[i]);
             }
 
-            if (ctx.Tours.Count == 0 && unservedCount >= 2)
+            if (remainingUnserved.Count >= 2)
             {
-                var fallbackTour = allGlobalStops.FindAll(s => !s.IsStationBay && !ctx.Served.Contains(s.StopEntity));
-                if (fallbackTour.Count >= 2)
+                var fallbackClusters = ClusterStopsByDistance(remainingUnserved, 2500f);
+                for (int c = 0; c < fallbackClusters.Count; c++)
                 {
-                    if (fallbackTour.Count > maxStopsPerLine)
-                        fallbackTour = SubsampleTour(fallbackTour, maxStopsPerLine);
-                    ctx.Tours.Add(fallbackTour);
-                    for (int t = 0; t < fallbackTour.Count; t++)
-                        ctx.Served.Add(fallbackTour[t].StopEntity);
+                    var clusterStops = fallbackClusters[c];
+                    if (clusterStops.Count >= 2)
+                    {
+                        if (clusterStops.Count > maxStopsPerLine)
+                            clusterStops = SubsampleTour(clusterStops, maxStopsPerLine);
+                        ctx.Tours.Add(clusterStops);
+                        for (int t = 0; t < clusterStops.Count; t++)
+                            ctx.Served.Add(clusterStops[t].StopEntity);
+                        log.Info($"Fallback Tour Created: Added fallback tour #{ctx.Tours.Count} with {clusterStops.Count} stops for isolated/unserved cluster.");
+                    }
                 }
             }
 
@@ -774,7 +780,7 @@ namespace AutoBusLines
         {
             var used = new HashSet<int>();
             var corridors = ctx.Corridors;
-            int minPairStops = math.max(4, ctx.MinStops);
+            int minPairStops = math.clamp(ctx.MinStops, 3, 6);
 
             var stopCounts = new int[corridors.Count];
             for (int c = 0; c < corridors.Count; c++)
@@ -861,11 +867,11 @@ namespace AutoBusLines
                         var firstA = chainA[0];
 
                         // The cross streets must be short; skip hopeless pairs before any path search
-                        if (NodeDistance(ctx, lastA.ToNode, firstB.FromNode) > 1000f || NodeDistance(ctx, lastB.ToNode, firstA.FromNode) > 1000f)
+                        if (NodeDistance(ctx, lastA.ToNode, firstB.FromNode) > 2000f || NodeDistance(ctx, lastB.ToNode, firstA.FromNode) > 2000f)
                             continue;
 
-                        var cross1 = FindShortestRoadPath(lastA.ToNode, firstB.FromNode, lastA.TangentAtTo, ctx.NodeOutEdges, ctx.NodePositions, 1000f, false, firstB.TangentAtFrom);
-                        var cross2 = FindShortestRoadPath(lastB.ToNode, firstA.FromNode, lastB.TangentAtTo, ctx.NodeOutEdges, ctx.NodePositions, 1000f, false, firstA.TangentAtFrom);
+                        var cross1 = FindShortestRoadPath(lastA.ToNode, firstB.FromNode, lastA.TangentAtTo, ctx.NodeOutEdges, ctx.NodePositions, 2000f, false, firstB.TangentAtFrom);
+                        var cross2 = FindShortestRoadPath(lastB.ToNode, firstA.FromNode, lastB.TangentAtTo, ctx.NodeOutEdges, ctx.NodePositions, 2000f, false, firstA.TangentAtFrom);
                         if (cross1 == null || cross2 == null)
                             continue;
 
@@ -947,8 +953,8 @@ namespace AutoBusLines
                 var firstFwd = chainFwd[0];
 
                 // Turnarounds: at a dead end the bus turns in place; elsewhere it needs a real loop
-                var endTurn = FindShortestRoadPath(lastFwd.ToNode, firstRev.FromNode, lastFwd.TangentAtTo, ctx.NodeOutEdges, ctx.NodePositions, 1500f, false, firstRev.TangentAtFrom);
-                var startTurn = FindShortestRoadPath(lastRev.ToNode, firstFwd.FromNode, lastRev.TangentAtTo, ctx.NodeOutEdges, ctx.NodePositions, 1500f, false, firstFwd.TangentAtFrom);
+                var endTurn = FindShortestRoadPath(lastFwd.ToNode, firstRev.FromNode, lastFwd.TangentAtTo, ctx.NodeOutEdges, ctx.NodePositions, 2500f, false, firstRev.TangentAtFrom);
+                var startTurn = FindShortestRoadPath(lastRev.ToNode, firstFwd.FromNode, lastRev.TangentAtTo, ctx.NodeOutEdges, ctx.NodePositions, 2500f, false, firstFwd.TangentAtFrom);
                 if (endTurn == null || startTurn == null)
                     continue;
 
@@ -960,7 +966,7 @@ namespace AutoBusLines
                 var tour = BuildTourFromRoadCycle(cycle, ctx.EdgeForwardStops, ctx.EdgeBackwardStops, ctx.MaxStops);
                 // Corridors with only a stop or two are better chained into neighbourhood loops (Phase C)
                 // than given a 2-stop line of their own.
-                if (tour.Count >= math.max(4, ctx.MinStops) && len / tour.Count <= MAX_AVG_STOP_SPACING)
+                if (tour.Count >= math.clamp(ctx.MinStops, 3, 6) && len / tour.Count <= MAX_AVG_STOP_SPACING)
                 {
                     AcceptTour(ctx, tour);
                     used.Add(i);
@@ -1015,7 +1021,7 @@ namespace AutoBusLines
                         if (!ctx.HasEdge[c])
                             continue;
                         float lb = math.distance(curPos, ctx.StopFromPos[c]);
-                        if (lb > 1200f)
+                        if (lb > 3000f)
                             continue;
                         var cs = stops[c];
                         if (ctx.Served.Contains(cs.StopEntity) || chainStops.Contains(cs.StopEntity))
@@ -1042,7 +1048,7 @@ namespace AutoBusLines
                         if (length + cands[k].Bound + cd.Length + homeLb > ctx.MaxRouteLength)
                             continue;
 
-                        var path = FindShortestRoadPath(currNode, cd.FromNode, currHeading, ctx.NodeOutEdges, ctx.NodePositions, 1500f, false, cd.TangentAtFrom);
+                        var path = FindShortestRoadPath(currNode, cd.FromNode, currHeading, ctx.NodeOutEdges, ctx.NodePositions, 4000f, false, cd.TangentAtFrom);
                         if (path == null)
                             continue;
 
@@ -1071,10 +1077,11 @@ namespace AutoBusLines
                 }
 
                 // Close the loop back to the seed. If that is impossible or too long, drop the last stop and retry.
+                float closingLimit = math.clamp(ctx.MaxRouteLength * 0.5f, FEEDER_CLOSING_LIMIT, 6000f);
                 List<DirectedRoadEdge> acceptedCycle = null;
                 while (true)
                 {
-                    var returnPath = FindShortestRoadPath(currNode, seedD.FromNode, currHeading, ctx.NodeOutEdges, ctx.NodePositions, FEEDER_CLOSING_LIMIT, false, seedD.TangentAtFrom);
+                    var returnPath = FindShortestRoadPath(currNode, seedD.FromNode, currHeading, ctx.NodeOutEdges, ctx.NodePositions, closingLimit, false, seedD.TangentAtFrom);
                     if (returnPath != null)
                     {
                         var cycle = new List<DirectedRoadEdge>();
@@ -1108,7 +1115,7 @@ namespace AutoBusLines
                 }
 
                 var tour = BuildTourFromRoadCycle(acceptedCycle, ctx.EdgeForwardStops, ctx.EdgeBackwardStops, ctx.MaxStops);
-                int minFeederStops = math.max(4, ctx.MinStops);
+                int minFeederStops = math.clamp(ctx.MinStops, 3, 6);
                 if (tour.Count >= minFeederStops)
                 {
                     AcceptTour(ctx, tour);
@@ -1187,7 +1194,8 @@ namespace AutoBusLines
                     continue;
 
                 var seedD = ctx.StopEdge[s];
-                var returnPath = FindShortestRoadPath(seedD.ToNode, seedD.FromNode, seedD.TangentAtTo, ctx.NodeOutEdges, ctx.NodePositions, 5000f, false, seedD.TangentAtFrom);
+                float maxReturn = math.clamp(ctx.MaxRouteLength * 0.6f, 5000f, 8000f);
+                var returnPath = FindShortestRoadPath(seedD.ToNode, seedD.FromNode, seedD.TangentAtTo, ctx.NodeOutEdges, ctx.NodePositions, maxReturn, false, seedD.TangentAtFrom);
                 if (returnPath == null || returnPath.Count == 0)
                     continue;
 
@@ -1199,7 +1207,7 @@ namespace AutoBusLines
                     continue;
 
                 var tour = BuildTourFromRoadCycle(cycle, ctx.EdgeForwardStops, ctx.EdgeBackwardStops, ctx.MaxStops);
-                int minResidualStops = math.max(4, ctx.MinStops);
+                int minResidualStops = math.clamp(ctx.MinStops, 3, 6);
                 if (tour.Count >= minResidualStops)
                 {
                     AcceptTour(ctx, tour);
@@ -1211,7 +1219,7 @@ namespace AutoBusLines
         // Dissolves any tour with fewer than 4 stops (e.g. 2-3 stops), absorbing its stops into neighboring tours
         private void ConsolidateSmallTours(PlanContext ctx)
         {
-            int minAllowed = 4;
+            int minAllowed = math.clamp(ctx.MinStops, 3, 4);
 
             for (int ti = ctx.Tours.Count - 1; ti >= 0; ti--)
             {
@@ -1275,8 +1283,217 @@ namespace AutoBusLines
                     }
                 }
 
+                if (!allAbsorbed)
+                {
+                    // If the tour has at least 3 stops and could not be absorbed into nearby lines
+                    // (e.g. isolated district across a bridge or river), retain it!
+                    if (tour.Count >= 3)
+                    {
+                        for (int s = 0; s < tour.Count; s++)
+                            ctx.Served.Add(tour[s].StopEntity);
+                        log.Info($"ConsolidateSmallTours: Retained isolated small tour #{ti + 1} with {tour.Count} stops because it could not be merged into distant lines.");
+                        continue;
+                    }
+                }
+
                 log.Info($"ConsolidateSmallTours: Dissolved small tour #{ti + 1} with only {tour.Count} stops (absorbed into nearby lines: {allAbsorbed}).");
                 ctx.Tours.RemoveAt(ti);
+            }
+        }
+
+        private static List<List<PlacedStop>> ClusterStopsByDistance(List<PlacedStop> stops, float maxClusterDist)
+        {
+            var result = new List<List<PlacedStop>>();
+            var visited = new bool[stops.Count];
+
+            for (int i = 0; i < stops.Count; i++)
+            {
+                if (visited[i])
+                    continue;
+
+                var cluster = new List<PlacedStop>();
+                var queue = new Queue<int>();
+                queue.Enqueue(i);
+                visited[i] = true;
+
+                while (queue.Count > 0)
+                {
+                    int curr = queue.Dequeue();
+                    cluster.Add(stops[curr]);
+
+                    float3 posCurr = stops[curr].Position;
+                    for (int j = 0; j < stops.Count; j++)
+                    {
+                        if (!visited[j])
+                        {
+                            float d = math.distance(posCurr, stops[j].Position);
+                            if (d <= maxClusterDist)
+                            {
+                                visited[j] = true;
+                                queue.Enqueue(j);
+                            }
+                        }
+                    }
+                }
+
+                result.Add(cluster);
+            }
+
+            return result;
+        }
+
+        // Dedicated pass for isolated clusters (e.g. settlements across bridges or rivers)
+        private void PlanUnservedClusters(PlanContext ctx)
+        {
+            var unservedStops = new List<PlacedStop>();
+            for (int i = 0; i < ctx.Stops.Count; i++)
+            {
+                var stop = ctx.Stops[i];
+                if (!stop.IsStationBay && !ctx.Served.Contains(stop.StopEntity) && ctx.HasEdge[i])
+                {
+                    unservedStops.Add(stop);
+                }
+            }
+
+            if (unservedStops.Count < 3)
+                return;
+
+            var clusters = ClusterStopsByDistance(unservedStops, 2000f);
+            for (int cl = 0; cl < clusters.Count; cl++)
+            {
+                var cluster = clusters[cl];
+                if (cluster.Count < 3)
+                    continue;
+
+                int minStops = math.clamp(ctx.MinStops, 3, 6);
+                if (cluster.Count < minStops)
+                    minStops = cluster.Count;
+
+                for (int sIdx = 0; sIdx < cluster.Count; sIdx++)
+                {
+                    var seed = cluster[sIdx];
+                    if (ctx.Served.Contains(seed.StopEntity))
+                        continue;
+
+                    int seedGlobalIdx;
+                    if (!ctx.StopIndex.TryGetValue(seed.StopEntity, out seedGlobalIdx) || !ctx.HasEdge[seedGlobalIdx])
+                        continue;
+
+                    var seedD = ctx.StopEdge[seedGlobalIdx];
+                    float3 seedFromPos = ctx.StopFromPos[seedGlobalIdx];
+
+                    var legs = new List<List<DirectedRoadEdge>>();
+                    legs.Add(new List<DirectedRoadEdge> { seedD });
+                    var legStopIds = new List<Entity> { seed.StopEntity };
+                    var chainStops = new HashSet<Entity> { seed.StopEntity };
+
+                    float length = seedD.Length;
+                    Entity currNode = seedD.ToNode;
+                    float3 currHeading = seedD.TangentAtTo;
+
+                    int maxChain = math.min(cluster.Count, ctx.MaxStops);
+
+                    for (int step = 0; step < maxChain - 1; step++)
+                    {
+                        float3 curPos;
+                        if (!ctx.NodePositions.TryGetValue(currNode, out curPos))
+                            break;
+
+                        int bestGlobalIdx = -1;
+                        float bestCost = float.MaxValue;
+                        List<DirectedRoadEdge> bestPath = null;
+
+                        for (int c = 0; c < cluster.Count; c++)
+                        {
+                            var cand = cluster[c];
+                            if (ctx.Served.Contains(cand.StopEntity) || chainStops.Contains(cand.StopEntity))
+                                continue;
+
+                            int candGlobalIdx;
+                            if (!ctx.StopIndex.TryGetValue(cand.StopEntity, out candGlobalIdx) || !ctx.HasEdge[candGlobalIdx])
+                                continue;
+
+                            float lb = math.distance(curPos, ctx.StopFromPos[candGlobalIdx]);
+                            if (lb > 3500f || lb >= bestCost)
+                                continue;
+
+                            var cd = ctx.StopEdge[candGlobalIdx];
+                            float3 toPos;
+                            float homeLb = ctx.NodePositions.TryGetValue(cd.ToNode, out toPos) ? math.distance(toPos, seedFromPos) : 0f;
+                            if (length + lb + cd.Length + homeLb > ctx.MaxRouteLength)
+                                continue;
+
+                            var path = FindShortestRoadPath(currNode, cd.FromNode, currHeading, ctx.NodeOutEdges, ctx.NodePositions, 4000f, false, cd.TangentAtFrom);
+                            if (path == null)
+                                continue;
+
+                            float pathLen = PathLength(path);
+                            if (pathLen < bestCost)
+                            {
+                                bestCost = pathLen;
+                                bestGlobalIdx = candGlobalIdx;
+                                bestPath = path;
+                            }
+                        }
+
+                        if (bestGlobalIdx < 0)
+                            break;
+
+                        var leg = new List<DirectedRoadEdge>(bestPath);
+                        leg.Add(ctx.StopEdge[bestGlobalIdx]);
+                        legs.Add(leg);
+                        legStopIds.Add(ctx.Stops[bestGlobalIdx].StopEntity);
+                        chainStops.Add(ctx.Stops[bestGlobalIdx].StopEntity);
+
+                        length += bestCost + ctx.StopEdge[bestGlobalIdx].Length;
+                        var lastEdge = leg[leg.Count - 1];
+                        currNode = lastEdge.ToNode;
+                        currHeading = lastEdge.TangentAtTo;
+                    }
+
+                    // Close the loop back to seed
+                    float closingLimit = math.clamp(ctx.MaxRouteLength * 0.5f, 3000f, 6000f);
+                    List<DirectedRoadEdge> acceptedCycle = null;
+                    while (true)
+                    {
+                        var returnPath = FindShortestRoadPath(currNode, seedD.FromNode, currHeading, ctx.NodeOutEdges, ctx.NodePositions, closingLimit, false, seedD.TangentAtFrom);
+                        if (returnPath != null)
+                        {
+                            var cycle = new List<DirectedRoadEdge>();
+                            for (int l = 0; l < legs.Count; l++)
+                                cycle.AddRange(legs[l]);
+                            cycle.AddRange(returnPath);
+
+                            float len;
+                            if (ValidateCycle(cycle, ctx.NodeOutEdges, out len, ctx.MaxRouteLength))
+                            {
+                                acceptedCycle = cycle;
+                                break;
+                            }
+                        }
+
+                        if (legs.Count <= 1)
+                            break;
+
+                        chainStops.Remove(legStopIds[legStopIds.Count - 1]);
+                        legStopIds.RemoveAt(legStopIds.Count - 1);
+                        legs.RemoveAt(legs.Count - 1);
+                        var prevLeg = legs[legs.Count - 1];
+                        currNode = prevLeg[prevLeg.Count - 1].ToNode;
+                        currHeading = prevLeg[prevLeg.Count - 1].TangentAtTo;
+                    }
+
+                    if (acceptedCycle != null)
+                    {
+                        var tour = BuildTourFromRoadCycle(acceptedCycle, ctx.EdgeForwardStops, ctx.EdgeBackwardStops, ctx.MaxStops);
+                        if (tour.Count >= minStops)
+                        {
+                            AcceptTour(ctx, tour);
+                            log.Info($"PlanUnservedClusters: Built Isolated Cluster Loop #{ctx.Tours.Count} with {tour.Count} stops.");
+                            break;
+                        }
+                    }
+                }
             }
         }
 
@@ -1332,7 +1549,7 @@ namespace AutoBusLines
                         var b = tour[(i + 1) % n];
                         float da = math.distance(a.Position, stop.Position);
                         float db = math.distance(b.Position, stop.Position);
-                        if (math.min(da, db) > 600f)
+                        if (math.min(da, db) > 1200f)
                             continue;
 
                         shortlist.Add(new InsertionCandidate { Tour = ti, Pos = i + 1, Cost = da + db - math.distance(a.Position, b.Position) });
@@ -1357,9 +1574,9 @@ namespace AutoBusLines
                         continue;
 
                     float toStop, fromStop, direct;
-                    if (!TryLegLength(ctx, ai, s, 2500f, out toStop) || !TryLegLength(ctx, s, bi, 2500f, out fromStop))
+                    if (!TryLegLength(ctx, ai, s, 4000f, out toStop) || !TryLegLength(ctx, s, bi, 4000f, out fromStop))
                         continue;
-                    if (!TryLegLength(ctx, ai, bi, 4000f, out direct))
+                    if (!TryLegLength(ctx, ai, bi, 5000f, out direct))
                         direct = 0f;
 
                     float detour = toStop + fromStop - direct;

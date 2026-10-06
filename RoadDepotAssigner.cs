@@ -98,9 +98,23 @@ namespace AutoBusLines
             return _roadToDepot;
         }
 
+        protected override void OnGameLoaded(Colossal.Serialization.Entities.Context serializationContext)
+        {
+            base.OnGameLoaded(serializationContext);
+            Reset();
+        }
+
         public void Reset()
         {
             _hasRun = false;
+            if (_roadToDepot.IsCreated)
+                _roadToDepot.Clear();
+        }
+
+        public void AssignNow()
+        {
+            _hasRun = false;
+            OnUpdate();
         }
 
         protected override void OnDestroy()

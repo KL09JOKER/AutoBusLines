@@ -19,6 +19,7 @@ namespace AutoBusLines
         private int _lastLoggedRoadCount = -1;
 
         public NativeList<Entity> RoadSegments { get; private set; }
+        public NativeList<Entity> DrivableSegments { get; private set; }
 
         protected override void OnCreate()
         {
@@ -45,6 +46,7 @@ namespace AutoBusLines
             });
 
             RoadSegments = new NativeList<Entity>(Allocator.Persistent);
+            DrivableSegments = new NativeList<Entity>(Allocator.Persistent);
 
             log.Info("RoadNetworkScanner created");
         }
@@ -55,6 +57,7 @@ namespace AutoBusLines
                 return;
 
             RoadSegments.Clear();
+            DrivableSegments.Clear();
             var entities = _roadQuery.ToEntityArray(Allocator.Temp);
 
             int gravelExcludedCount = 0;
@@ -68,6 +71,8 @@ namespace AutoBusLines
                     gravelExcludedCount++;
                     continue;
                 }
+
+                DrivableSegments.Add(roadEntity);
 
                 if (IsHighwayOrRamp(roadEntity))
                 {
@@ -226,16 +231,34 @@ namespace AutoBusLines
             return false;
         }
 
+        protected override void OnGameLoaded(Colossal.Serialization.Entities.Context serializationContext)
+        {
+            base.OnGameLoaded(serializationContext);
+            Reset();
+        }
+
         public void Reset()
         {
             _hasRun = false;
             _lastLoggedRoadCount = -1;
+            if (RoadSegments.IsCreated)
+                RoadSegments.Clear();
+            if (DrivableSegments.IsCreated)
+                DrivableSegments.Clear();
+        }
+
+        public void ScanNow()
+        {
+            _hasRun = false;
+            OnUpdate();
         }
 
         protected override void OnDestroy()
         {
             if (RoadSegments.IsCreated)
                 RoadSegments.Dispose();
+            if (DrivableSegments.IsCreated)
+                DrivableSegments.Dispose();
             base.OnDestroy();
         }
     }
