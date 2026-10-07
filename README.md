@@ -2,7 +2,7 @@
 
 [![Paradox Mods](https://img.shields.io/badge/Paradox%20Mods-161531-blue.svg)](https://mods.paradoxplaza.com/mods/161531/Windows)
 [![Cities: Skylines II](https://img.shields.io/badge/Cities:%20Skylines%20II-Mod-orange.svg)](https://www.paradoxinteractive.com/games/cities-skylines-ii)
-[![Version](https://img.shields.io/badge/Version-2.0.1-green.svg)](https://mods.paradoxplaza.com/mods/161531/Windows)
+[![Version](https://img.shields.io/badge/Version-2.0.2-green.svg)](https://mods.paradoxplaza.com/mods/161531/Windows)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE.md)
 
 Auto Bus Lines automatically designs and constructs complete, functional bus transit networks across your entire city. Open the planner, calculate a transit plan, review it interactively, tweak what you want, and hit **Build Selected**.
@@ -66,12 +66,12 @@ Contributions, bug fixes, feature suggestions, and localization updates are welc
 
 - Fork this repository and submit a **Pull Request**.
 - Please describe the issue or enhancement clearly in your PR.
-- The UI is written in **TypeScript + React (SCSS)** in `auto-bus-lines-ui/src/`.
+- The UI is written in **TypeScript + React (SCSS)** in `ui/src/`.
 - The backend is written in **C#** targeting the Cities: Skylines II modding SDK.
 
 ### UI Development
 ```bash
-cd auto-bus-lines-ui
+cd ui
 npm install
 npm run build   # compile once
 npm run dev     # watch mode

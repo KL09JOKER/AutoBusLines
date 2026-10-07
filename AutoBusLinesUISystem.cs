@@ -91,6 +91,7 @@ namespace AutoBusLines
             AddBinding(new TriggerBinding(kGroup, "deleteAll", OnDeleteAll));
 
             log.Info("AutoBusLinesUISystem created and UI bindings registered successfully!");
+            UpdateStopPrefabOptions();
         }
 
         protected override void OnGameLoaded(Colossal.Serialization.Entities.Context serializationContext)
@@ -104,6 +105,10 @@ namespace AutoBusLines
             HoveredRouteId = 0;
             HoveredStopIndex = -1;
             PlanRouteOverlaySystem.ClearCache();
+
+            var generator = World.GetExistingSystemManaged<BusLineGenerator>();
+            generator?.UpdateDiscoveredPrefabs();
+            UpdateStopPrefabOptions();
         }
 
         public static int HoveredRouteId { get; set; } = 0;
@@ -112,6 +117,8 @@ namespace AutoBusLines
         public void OpenPanel()
         {
             SyncSettingsToUI();
+            var generator = World.GetExistingSystemManaged<BusLineGenerator>();
+            generator?.UpdateDiscoveredPrefabs();
             UpdateStopPrefabOptions();
             m_PanelVisible.Update(true);
         }
@@ -172,6 +179,8 @@ namespace AutoBusLines
             if (nextState)
             {
                 SyncSettingsToUI();
+                var generator = World.GetExistingSystemManaged<BusLineGenerator>();
+                generator?.UpdateDiscoveredPrefabs();
                 UpdateStopPrefabOptions();
             }
             else
@@ -186,6 +195,8 @@ namespace AutoBusLines
         private void OnOpenPanel()
         {
             SyncSettingsToUI();
+            var generator = World.GetExistingSystemManaged<BusLineGenerator>();
+            generator?.UpdateDiscoveredPrefabs();
             UpdateStopPrefabOptions();
             m_PanelVisible.Update(true);
         }
@@ -342,7 +353,7 @@ namespace AutoBusLines
 
         private void OnSetMinStops(int value)
         {
-            value = Math.Max(2, Math.Min(30, value));
+            value = Math.Max(BusLineGenerator.ABSOLUTE_MIN_STOPS, Math.Min(30, value));
             if (Mod.setting != null)
             {
                 Mod.setting.MinStopsPerLine = value;
@@ -442,10 +453,30 @@ namespace AutoBusLines
 
         /// <summary>
         /// Push the discovered stop prefab list with icons to the UI.
-        /// Call this after stop prefabs have been discovered.
+        /// Call this after stop prefabs have been discovered or on UI load.
         /// </summary>
         public void UpdateStopPrefabOptions()
         {
+            if (Setting.DiscoveredStopPrefabNames.Count == 0)
+            {
+                var generator = World.GetExistingSystemManaged<BusLineGenerator>();
+                generator?.UpdateDiscoveredPrefabs();
+
+                if (Setting.DiscoveredStopPrefabNames.Count == 0)
+                {
+                    Setting.DiscoveredStopPrefabNames.AddRange(new[]
+                    {
+                        "EU_BusStop01",
+                        "EU_BusStop02",
+                        "NA_BusStop01",
+                        "NA_BusStop02",
+                        "EU_BusStopBicycle01",
+                        "NA_BusStopBicycle01",
+                        "Pack7-BusStop01"
+                    });
+                }
+            }
+
             var list = new List<object>();
             list.Add(new { name = "All", icon = "Media/Game/Icons/Bus.svg" });
 

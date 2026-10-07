@@ -22,8 +22,8 @@ project.nuget.cache
 # ─── UI: node_modules & compiled bundle output ──────────────────────────────
 # Source (src/, tsconfig, webpack.config.js, package.json) IS tracked
 # Only the compiled output bundle is excluded
-auto-bus-lines-ui/node_modules/
-auto-bus-lines-ui/build/
+ui/node_modules/
+ui/build/
 
 # ─── Paradox Mods publish config & thumbnails (local/machine-specific) ──────
 # Keep entirely off GitHub — contains credentials, thumbnails, publish profiles
@@ -47,6 +47,7 @@ skills-lock.json
 
 # ─── Scratch / Temp / Local-only files ──────────────────────────────────────
 scratch/
+docs/
 *.patch
 *.zip
 *.log

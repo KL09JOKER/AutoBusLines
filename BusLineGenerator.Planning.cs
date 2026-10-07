@@ -454,13 +454,13 @@ namespace AutoBusLines
                     remainingUnserved.Add(allGlobalStops[i]);
             }
 
-            if (remainingUnserved.Count >= 2)
+            if (remainingUnserved.Count >= ABSOLUTE_MIN_STOPS)
             {
                 var fallbackClusters = ClusterStopsByDistance(remainingUnserved, 2500f);
                 for (int c = 0; c < fallbackClusters.Count; c++)
                 {
                     var clusterStops = fallbackClusters[c];
-                    if (clusterStops.Count >= 2)
+                    if (clusterStops.Count >= ABSOLUTE_MIN_STOPS)
                     {
                         if (clusterStops.Count > maxStopsPerLine)
                             clusterStops = SubsampleTour(clusterStops, maxStopsPerLine);

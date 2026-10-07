@@ -46,7 +46,7 @@ namespace AutoBusLines
         public string HowToUse => string.Empty;
 
         [SettingsUISection(kSection, kVersionGroup)]
-        public string ModVersion => "1.1.0";
+        public string ModVersion => "2.0.2";
 
         // ==========================================
         // Backend / Custom UI Settings (Persisted to Disk)
@@ -62,7 +62,16 @@ namespace AutoBusLines
         [SettingsUIHidden]
         public int DeadEndDistanceThreshold { get; set; } = 300;
 
-        public static readonly List<string> DiscoveredStopPrefabNames = new List<string>();
+        public static readonly List<string> DiscoveredStopPrefabNames = new List<string>
+        {
+            "EU_BusStop01",
+            "EU_BusStop02",
+            "NA_BusStop01",
+            "NA_BusStop02",
+            "EU_BusStopBicycle01",
+            "NA_BusStopBicycle01",
+            "Pack7-BusStop01"
+        };
         public static readonly Dictionary<string, string> DiscoveredStopPrefabIcons = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         public static int DiscoveredStopPrefabVersion = 1;
 
@@ -72,8 +81,14 @@ namespace AutoBusLines
         [SettingsUIHidden]
         public string SelectedStopPrefab { get; set; } = "All";
 
+        private int _minStopsPerLine = 6;
+
         [SettingsUIHidden]
-        public int MinStopsPerLine { get; set; } = 6;
+        public int MinStopsPerLine
+        {
+            get => _minStopsPerLine;
+            set => _minStopsPerLine = Math.Max(3, value);
+        }
 
         [SettingsUIHidden]
         public int MaxStopsPerLine { get; set; } = 18;
@@ -211,7 +226,7 @@ namespace AutoBusLines
                     "5. BUILD TRANSIT LINES:\n" +
                     "   Click 'Build Selected Routes' to construct the active transit network in your city!\n\n" +
                     "6. MAINTENANCE & REPAIRS:\n" +
-                    "   If you alter roads or bulldoze intersections, open the Settings tab and click 'Repair Broken Bus Lines' to re-path routes, or 'Delete All Lines & Stops' to start fresh."
+                    "   If you alter roads or bulldoze intersections, open the Settings tab and click 'Repair Broken Bus Lines' to re-path routes, or 'Delete All Lines & Stops' (warning: deletes ALL bus lines and roadside stops city-wide, including manually created lines) to start fresh."
                 },
 
                 // Version

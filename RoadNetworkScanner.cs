@@ -17,6 +17,7 @@ namespace AutoBusLines
         private PrefabSystem _prefabSystem;
         private bool _hasRun = false;
         private int _lastLoggedRoadCount = -1;
+        private int _frameThrottleCounter = 0;
 
         public NativeList<Entity> RoadSegments { get; private set; }
         public NativeList<Entity> DrivableSegments { get; private set; }
@@ -56,6 +57,12 @@ namespace AutoBusLines
             if (_hasRun)
                 return;
 
+            if (_frameThrottleCounter > 0)
+            {
+                _frameThrottleCounter--;
+                return;
+            }
+
             RoadSegments.Clear();
             DrivableSegments.Clear();
             var entities = _roadQuery.ToEntityArray(Allocator.Temp);
@@ -91,6 +98,7 @@ namespace AutoBusLines
                     _lastLoggedRoadCount = RoadSegments.Length;
                 }
                 _hasRun = true;
+                _frameThrottleCounter = 0;
             }
             else
             {
@@ -99,6 +107,7 @@ namespace AutoBusLines
                     log.Info("RoadNetworkScanner: No paved municipal roads found in city yet.");
                     _lastLoggedRoadCount = 0;
                 }
+                _frameThrottleCounter = 60; // Throttle empty map rescanning to once every ~60 frames
             }
 
             entities.Dispose();
@@ -240,6 +249,7 @@ namespace AutoBusLines
         public void Reset()
         {
             _hasRun = false;
+            _frameThrottleCounter = 0;
             _lastLoggedRoadCount = -1;
             if (RoadSegments.IsCreated)
                 RoadSegments.Clear();
@@ -250,6 +260,7 @@ namespace AutoBusLines
         public void ScanNow()
         {
             _hasRun = false;
+            _frameThrottleCounter = 0;
             OnUpdate();
         }
 

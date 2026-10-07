@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from "react";
 import { bindValue, trigger, useValue } from "cs2/api";
 import { Panel, Button, Icon, Scrollable, Tooltip, ConfirmationDialog, Portal } from "cs2/ui";
 import { Checkbox } from "./components/Checkbox";
-import { getBusStopModelInfo } from "./busStopModels";
+import { getBusStopModelInfo, BUS_STOP_MODELS } from "./busStopModels";
 import styles from "./PlanPanel.module.scss";
 
 interface PlannedStop {
@@ -264,28 +264,37 @@ export const PlanPanel: React.FC<PlanPanelProps> = ({ onClose }) => {
     const prefabOptions: StopModelOption[] = useMemo(() => {
         try {
             const parsed = JSON.parse(prefabOptionsJson);
-            if (!Array.isArray(parsed)) return [];
-            return parsed
-                .map((item: any) => {
-                    if (typeof item === "string") {
+            if (Array.isArray(parsed) && parsed.length > 1) {
+                const filtered = parsed
+                    .map((item: any) => {
+                        if (typeof item === "string") {
+                            return {
+                                name: item,
+                                icon: item === "All" ? "Media/Game/Icons/Bus.svg" : "Media/Game/Icons/BusStop.svg"
+                            };
+                        }
                         return {
-                            name: item,
-                            icon: item === "All" ? "Media/Game/Icons/Bus.svg" : "Media/Game/Icons/BusStop.svg"
+                            name: item.name || "",
+                            icon: item.icon || "Media/Game/Icons/BusStop.svg"
                         };
-                    }
-                    return {
-                        name: item.name || "",
-                        icon: item.icon || "Media/Game/Icons/BusStop.svg"
-                    };
-                })
-                .filter(opt => {
-                    if (!opt.name) return false;
-                    const lower = opt.name.toLowerCase();
-                    return !lower.includes("integrated") && !lower.includes("placeholder") && !lower.includes("platform");
-                });
+                    })
+                    .filter(opt => {
+                        if (!opt.name) return false;
+                        const lower = opt.name.toLowerCase();
+                        return !lower.includes("integrated") && !lower.includes("placeholder") && !lower.includes("platform");
+                    });
+                if (filtered.length > 1) {
+                    return filtered;
+                }
+            }
         } catch {
-            return [];
+            // Ignore error and use default fallback below
         }
+
+        return Object.keys(BUS_STOP_MODELS).map(key => ({
+            name: key,
+            icon: key === "All" ? "Media/Game/Icons/Bus.svg" : "Media/Game/Icons/BusStop.svg"
+        }));
     }, [prefabOptionsJson]);
 
     const densityModes = ["Balanced", "Dense", "Ultra", "Low", "Custom"];
@@ -451,7 +460,7 @@ export const PlanPanel: React.FC<PlanPanelProps> = ({ onClose }) => {
                                 <button
                                     type="button"
                                     className={styles.stepperBtn}
-                                    onClick={() => trigger("autoBusLines", "setMinStops", Math.max(2, minStops - 1))}
+                                    onClick={() => trigger("autoBusLines", "setMinStops", Math.max(3, minStops - 1))}
                                 >
                                     −
                                 </button>
@@ -711,7 +720,7 @@ export const PlanPanel: React.FC<PlanPanelProps> = ({ onClose }) => {
                                 </div>
                                 <div className={styles.actionCardTexts}>
                                     <span className={styles.actionCardTitle}>Delete All Lines & Stops</span>
-                                    <span className={styles.actionCardDesc}>Wipe all bus lines and roadside stops. (Stations & depots preserved).</span>
+                                    <span className={styles.actionCardDesc}>Wipe all bus lines and roadside stops city-wide, including manual lines. (Stations & depots preserved).</span>
                                 </div>
                             </div>
                             <Button
@@ -719,7 +728,7 @@ export const PlanPanel: React.FC<PlanPanelProps> = ({ onClose }) => {
                                 className={`${styles.maintBtn} ${styles.deleteBtn}`}
                                 onSelect={() => confirmAndExecute(
                                     "Delete All Lines & Stops",
-                                    "Are you sure you want to delete ALL bus transit lines and roadside bus stops in your city? This action cannot be undone.",
+                                    "Warning: This action deletes ALL bus transit lines and roadside bus stops in your city, including lines and stops you created manually. Stations and depots will be preserved. This action cannot be undone.",
                                     () => trigger("autoBusLines", "deleteAll")
                                 )}
                             >

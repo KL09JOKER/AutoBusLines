@@ -38,9 +38,9 @@
 		<None Remove="Reference\**" />
 		<EmbeddedResource Remove="Reference\**" />
 
-		<Compile Remove="auto-bus-lines-ui\**" />
-		<None Remove="auto-bus-lines-ui\**" />
-		<EmbeddedResource Remove="auto-bus-lines-ui\**" />
+		<Compile Remove="ui\**" />
+		<None Remove="ui\**" />
+		<EmbeddedResource Remove="ui\**" />
 
 		<Compile Remove="scratch\**" />
 		<None Remove="scratch\**" />
@@ -115,8 +115,8 @@
 	</ItemGroup>
 
 	<Target Name="BuildUI" AfterTargets="DeployWIP">
-		<Exec Command="npm.cmd run build" WorkingDirectory="auto-bus-lines-ui" />
-		<Copy SourceFiles="auto-bus-lines-ui\mod.json" DestinationFolder="$(DeployDir)" />
+		<Exec Command="npm.cmd run build" WorkingDirectory="ui" />
+		<Copy SourceFiles="ui\mod.json" DestinationFolder="$(DeployDir)" />
 	</Target>
 
 </Project>

@@ -32,6 +32,7 @@ namespace AutoBusLines
         private PrefabSystem _prefabSystem;
         private bool _hasRun = false;
         private int _lastLoggedHubCount = -1;
+        private int _frameThrottleCounter = 0;
 
         public NativeList<Entity> BusDepots { get; private set; }
         public NativeList<Entity> BusStations { get; private set; }
@@ -126,6 +127,12 @@ namespace AutoBusLines
         {
             if (_hasRun)
                 return;
+
+            if (_frameThrottleCounter > 0)
+            {
+                _frameThrottleCounter--;
+                return;
+            }
 
             BusDepots.Clear();
             BusStations.Clear();
@@ -361,6 +368,7 @@ namespace AutoBusLines
                     _lastLoggedHubCount = AllHubs.Length;
                 }
                 _hasRun = true;
+                _frameThrottleCounter = 0;
             }
             else
             {
@@ -369,6 +377,7 @@ namespace AutoBusLines
                     log.Info("DepotFinderSystem: No Bus Depots or Bus Stations found in the city yet. Waiting for player to construct transit hubs...");
                     _lastLoggedHubCount = 0;
                 }
+                _frameThrottleCounter = 60; // Throttle empty map rescanning to once every ~60 frames
             }
         }
 
@@ -412,6 +421,7 @@ namespace AutoBusLines
         public void Reset()
         {
             _hasRun = false;
+            _frameThrottleCounter = 0;
             _lastLoggedHubCount = -1;
             if (BusDepots.IsCreated)
                 BusDepots.Clear();
@@ -427,6 +437,7 @@ namespace AutoBusLines
         public void ScanNow()
         {
             _hasRun = false;
+            _frameThrottleCounter = 0;
             OnUpdate();
         }
 
