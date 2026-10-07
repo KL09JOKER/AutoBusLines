@@ -2,7 +2,7 @@
 
 [![Paradox Mods](https://img.shields.io/badge/Paradox%20Mods-161531-blue.svg)](https://mods.paradoxplaza.com/mods/161531/Windows)
 [![Cities: Skylines II](https://img.shields.io/badge/Cities:%20Skylines%20II-Mod-orange.svg)](https://www.paradoxinteractive.com/games/cities-skylines-ii)
-[![Version](https://img.shields.io/badge/Version-2.0.2-green.svg)](https://mods.paradoxplaza.com/mods/161531/Windows)
+[![Version](https://img.shields.io/badge/Version-2.0.3-green.svg)](https://mods.paradoxplaza.com/mods/161531/Windows)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE.md)
 
 Auto Bus Lines automatically designs and constructs complete, functional bus transit networks across your entire city. Open the planner, calculate a transit plan, review it interactively, tweak what you want, and hit **Build Selected**.
@@ -13,24 +13,23 @@ Auto Bus Lines automatically designs and constructs complete, functional bus tra
 
 ## How to Use
 
-1. Build at least one **Bus Depot** or **Passenger Bus Terminal** in your city.
-2. Open the **Auto Bus Lines** floating window from the top-right toolbar bus icon (or via Options → Mod Settings → Auto Bus Lines).
-3. Go to the **Plan** tab and click **Calculate Transit Plan** to generate a full city-wide bus network proposal.
-4. Review proposed routes and stops. Toggle off any stops or entire lines you don't want.
-5. Click **Build Selected** to construct only the approved routes — or **Discard** to start over with **New Plan**.
-6. If you upgrade roads or bulldoze anything later, use **Repair Broken Bus Lines** in the **Settings** tab.
+1. Open the **Auto Bus Lines** floating window from the top toolbar bus icon (or via Options → Mod Settings → Auto Bus Lines).
+2. **Lines Planner tab**: Automatically design and build complete bus loop routes connecting to your nearest Bus Depot or Terminal. Scope to a specific **District** or plan citywide, preview the proposed network, and hit **Build Selected**.
+3. **Stops Generator tab**: Generate curbside bus stops across a selected district without creating transit lines, allowing you to assign lines manually.
+4. **Settings tab**: Customize stop density, spacing, stop models, line colors, and maintenance tools.
 
 ---
 
 ## Features
 
-### 🗺️ Interactive Plan Mode
-- Preview the full proposed bus network before anything is placed in the city.
-- **Line & Stop Toggles**: Enable or disable individual stops or entire proposed lines.
-- **Alternative Plans**: Click **[New Plan]** to get a completely different corridor layout.
-- **Build Selected / Discard**: Build only what you approve. Discard safely without touching your city.
-- **Camera Focus**: Click the focus button on any stop to fly the camera directly to it.
-- **Variant Badge**: Shows which plan variant you're currently viewing (e.g. Variant #2).
+### 🗂️ 3-Tab Architecture
+- **Lines Planner**: Interactive loop route preview, stop and line toggles, multi-variant generator.
+- **Stops Generator**: Standalone curbside stop generation across roads without automated lines or depots.
+- **Settings & Tools**: Spacing/density tuning, color palette customization, line repair, and unused stop cleanup.
+
+### 🏙️ District Boundary Scoping
+- Restrict route planning and stop placement to a selected city District or plan citywide.
+- Clean up unassigned stops district-by-district with **Clear Unused Stops**.
 
 ### 🚏 Smart Stop Placement
 - Automatically places roadside bus stops along road spans, safely away from intersections.

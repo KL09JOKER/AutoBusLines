@@ -76,6 +76,7 @@ namespace AutoBusLines
             public int MinStops;
             public int MaxStops;
             public float MaxRouteLength;
+            public Entity DistrictFilter = Entity.Null;
 
             // Per-stop caches, indexed like Stops
             public Dictionary<Entity, int> StopIndex = new Dictionary<Entity, int>();
@@ -408,15 +409,42 @@ namespace AutoBusLines
             int maxStopsPerLine,
             float maxRouteLength,
             HashSet<Entity> alreadyCoveredStops,
+            Entity districtFilter,
             out HashSet<Entity> servedStopEntities)
         {
+            List<RoadCorridor> corridors = allCorridors;
+            if (districtFilter != Entity.Null)
+            {
+                var districtCorridors = new List<RoadCorridor>();
+                for (int c = 0; c < allCorridors.Count; c++)
+                {
+                    var corr = allCorridors[c];
+                    bool inDistrict = false;
+                    for (int s = 0; s < corr.Segments.Count; s++)
+                    {
+                        if (IsRoadInDistrict(corr.Segments[s].RoadEntity, districtFilter))
+                        {
+                            inDistrict = true;
+                            break;
+                        }
+                    }
+                    if (inDistrict)
+                    {
+                        districtCorridors.Add(corr);
+                    }
+                }
+                corridors = districtCorridors;
+                log.Info($"PlanTours: Scoped corridors to {corridors.Count} of {allCorridors.Count} for target district.");
+            }
+
             var ctx = new PlanContext
             {
                 Stops = allGlobalStops,
-                Corridors = allCorridors,
+                Corridors = corridors,
                 MinStops = minStopsPerLine,
                 MaxStops = maxStopsPerLine,
-                MaxRouteLength = maxRouteLength
+                MaxRouteLength = maxRouteLength,
+                DistrictFilter = districtFilter
             };
 
             // Pre-seed ctx.Served with already covered curbside stops
@@ -464,6 +492,7 @@ namespace AutoBusLines
                     {
                         if (clusterStops.Count > maxStopsPerLine)
                             clusterStops = SubsampleTour(clusterStops, maxStopsPerLine);
+                        clusterStops = OrderStopsCircular(clusterStops);
                         ctx.Tours.Add(clusterStops);
                         for (int t = 0; t < clusterStops.Count; t++)
                             ctx.Served.Add(clusterStops[t].StopEntity);
@@ -621,6 +650,40 @@ namespace AutoBusLines
                 if (EntityManager.HasComponent<Game.Objects.Transform>(stationEntity))
                 {
                     stationPos = EntityManager.GetComponentData<Game.Objects.Transform>(stationEntity).m_Position;
+                }
+
+                // If scoped to a specific district, skip bus stations located outside the target district
+                if (ctx.DistrictFilter != Entity.Null)
+                {
+                    bool stationInDistrict = false;
+                    if (EntityManager.HasComponent<Game.Areas.CurrentDistrict>(stationEntity) &&
+                        EntityManager.GetComponentData<Game.Areas.CurrentDistrict>(stationEntity).m_District == ctx.DistrictFilter)
+                    {
+                        stationInDistrict = true;
+                    }
+                    else
+                    {
+                        Entity attachedRoad = Entity.Null;
+                        if (EntityManager.HasComponent<Game.Objects.Attached>(stationEntity))
+                            attachedRoad = EntityManager.GetComponentData<Game.Objects.Attached>(stationEntity).m_Parent;
+                        else if (EntityManager.HasComponent<Game.Common.Owner>(stationEntity))
+                            attachedRoad = EntityManager.GetComponentData<Game.Common.Owner>(stationEntity).m_Owner;
+
+                        if (attachedRoad != Entity.Null && IsRoadInDistrict(attachedRoad, ctx.DistrictFilter))
+                        {
+                            stationInDistrict = true;
+                        }
+                        else if (IsPointInDistrict(ctx.DistrictFilter, stationPos))
+                        {
+                            stationInDistrict = true;
+                        }
+                    }
+
+                    if (!stationInDistrict)
+                    {
+                        log.Info($"PlanStationHubLoops: Skipping Bus Station {stationEntity.Index} outside target district filter.");
+                        continue;
+                    }
                 }
 
                 // 1. Gather unserved candidate curbside stops within maxStationRadius of this station
@@ -1340,6 +1403,25 @@ namespace AutoBusLines
             }
 
             return result;
+        }
+
+        private static List<PlacedStop> OrderStopsCircular(List<PlacedStop> stops)
+        {
+            if (stops.Count <= 3) return stops;
+
+            float2 centroid = float2.zero;
+            for (int i = 0; i < stops.Count; i++)
+                centroid += stops[i].Position.xz;
+            centroid /= stops.Count;
+
+            var sorted = new List<PlacedStop>(stops);
+            sorted.Sort((a, b) =>
+            {
+                float angleA = math.atan2(a.Position.z - centroid.y, a.Position.x - centroid.x);
+                float angleB = math.atan2(b.Position.z - centroid.y, b.Position.x - centroid.x);
+                return angleA.CompareTo(angleB);
+            });
+            return sorted;
         }
 
         // Dedicated pass for isolated clusters (e.g. settlements across bridges or rivers)

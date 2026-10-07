@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Colossal.Logging;
 using Colossal.Mathematics;
@@ -10,6 +10,7 @@ using Game.Prefabs;
 using Game.Rendering;
 using Game.Routes;
 using Game.Tools;
+using Game.Areas;
 using Unity.Entities;
 using Unity.Collections;
 using Unity.Mathematics;
@@ -1661,6 +1662,388 @@ namespace AutoBusLines
 
             log.Info($"Active Bus Stop Prefab Pool: {candidatePrefabs.Count} prefabs available for placement (Selected Model: '{selectedModel}')");
             return true;
+        }
+
+        public List<PlacedStop> DiscoverExistingBusStops(out Dictionary<Entity, List<PlacedStop>> existingStopsByRoad)
+        {
+            existingStopsByRoad = new Dictionary<Entity, List<PlacedStop>>();
+            var allExistingStops = new List<PlacedStop>();
+
+            if (_existingBusStopQuery.IsEmptyIgnoreFilter)
+                return allExistingStops;
+
+            var existingStopEntities = _existingBusStopQuery.ToEntityArray(Allocator.Temp);
+            var existingStopPrefabRefs = _existingBusStopQuery.ToComponentDataArray<PrefabRef>(Allocator.Temp);
+            var existingStopTransforms = _existingBusStopQuery.ToComponentDataArray<Game.Objects.Transform>(Allocator.Temp);
+
+            for (int i = 0; i < existingStopEntities.Length; i++)
+            {
+                var stopEntity = existingStopEntities[i];
+                var prefabEntity = existingStopPrefabRefs[i].m_Prefab;
+
+                if (EntityManager.HasComponent<Game.Objects.OutsideConnection>(stopEntity) ||
+                    EntityManager.HasComponent<Game.Net.OutsideConnection>(stopEntity) ||
+                    EntityManager.HasComponent<Game.Prefabs.OutsideConnectionData>(prefabEntity))
+                {
+                    continue;
+                }
+
+                string pName = GetPrefabName(prefabEntity);
+                if (!string.IsNullOrEmpty(pName) && (
+                    pName.IndexOf("Outside Connection", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    pName.IndexOf("OutsideConnection", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    pName.IndexOf("Placeholder", StringComparison.OrdinalIgnoreCase) >= 0))
+                {
+                    continue;
+                }
+
+                if (!EntityManager.HasComponent<TransportStopData>(prefabEntity))
+                    continue;
+
+                var stopData = EntityManager.GetComponentData<TransportStopData>(prefabEntity);
+                if (stopData.m_TransportType != TransportType.Bus || !stopData.m_PassengerTransport)
+                    continue;
+
+                // Station platform bays are handled separately as hub anchors
+                if (_depotFinder != null && _depotFinder.StationPlatformStops.Contains(stopEntity))
+                    continue;
+
+                var transform = existingStopTransforms[i];
+                float3 stopPos = transform.m_Position;
+                float3 stopForward = math.mul(transform.m_Rotation, new float3(0, 0, 1));
+
+                Entity attachedRoad = Entity.Null;
+                if (EntityManager.HasComponent<Attached>(stopEntity))
+                {
+                    attachedRoad = EntityManager.GetComponentData<Attached>(stopEntity).m_Parent;
+                }
+                else if (EntityManager.HasComponent<Game.Common.Owner>(stopEntity))
+                {
+                    attachedRoad = EntityManager.GetComponentData<Game.Common.Owner>(stopEntity).m_Owner;
+                }
+
+                // If a roadside stop erroneously has Owner(road), strip it so it becomes interactable immediately
+                if (EntityManager.HasComponent<Game.Common.Owner>(stopEntity))
+                {
+                    var owner = EntityManager.GetComponentData<Game.Common.Owner>(stopEntity).m_Owner;
+                    if (owner != Entity.Null && EntityManager.HasComponent<Game.Net.Edge>(owner))
+                    {
+                        EntityManager.RemoveComponent<Game.Common.Owner>(stopEntity);
+                        log.Info($"Healed roadside bus stop {stopEntity.Index}: removed erroneous Owner component to restore interactivity.");
+                    }
+                }
+
+                // Determine nearest Hub
+                Entity nearestHub = Entity.Null;
+                float minHubDist = float.MaxValue;
+
+                if (_depotFinder != null)
+                {
+                    for (int h = 0; h < _depotFinder.AllHubs.Length; h++)
+                    {
+                        var hub = _depotFinder.AllHubs[h];
+                        float d = math.distance(stopPos, hub.Position);
+                        if (hub.IsStation) d *= 0.85f;
+                        if (d < minHubDist)
+                        {
+                            minHubDist = d;
+                            nearestHub = hub.HubEntity;
+                        }
+                    }
+                }
+
+                var placed = new PlacedStop
+                {
+                    StopEntity = stopEntity,
+                    Position = stopPos,
+                    Forward = stopForward,
+                    RoadEntity = attachedRoad,
+                    HubEntity = nearestHub,
+                    IsPreExisting = true,
+                    IsStationBay = false
+                };
+
+                allExistingStops.Add(placed);
+
+                if (attachedRoad != Entity.Null)
+                {
+                    if (!existingStopsByRoad.ContainsKey(attachedRoad))
+                        existingStopsByRoad[attachedRoad] = new List<PlacedStop>();
+                    existingStopsByRoad[attachedRoad].Add(placed);
+                }
+            }
+
+            existingStopEntities.Dispose();
+            existingStopPrefabRefs.Dispose();
+            existingStopTransforms.Dispose();
+
+            return allExistingStops;
+        }
+
+        public (int placed, int reused, string districtName) PlaceStopsOnly(
+            Entity districtFilter,
+            string stopModel,
+            StopDensityMode densityMode,
+            int targetSpacing)
+        {
+            string districtName = "All City";
+            if (districtFilter != Entity.Null && EntityManager.Exists(districtFilter))
+            {
+                districtName = _nameSystem?.GetRenderedLabelName(districtFilter);
+                if (string.IsNullOrWhiteSpace(districtName))
+                    districtName = $"District {districtFilter.Index}";
+            }
+
+            if (!FindBusStopPrefabs(out List<Entity> candidatePrefabs, out Entity defaultPrefab))
+            {
+                log.Warn("PlaceStopsOnly: No valid bus stop prefabs found.");
+                return (0, 0, districtName);
+            }
+
+            // Filter candidate prefabs to chosen model if specified
+            if (!string.IsNullOrEmpty(stopModel) && stopModel != "All")
+            {
+                var specific = new List<Entity>();
+                for (int i = 0; i < candidatePrefabs.Count; i++)
+                {
+                    if (string.Equals(GetPrefabName(candidatePrefabs[i]), stopModel, StringComparison.OrdinalIgnoreCase))
+                    {
+                        specific.Add(candidatePrefabs[i]);
+                    }
+                }
+                if (specific.Count > 0)
+                {
+                    candidatePrefabs = specific;
+                }
+            }
+
+            // Calculate effective spacing based on density
+            float effectiveSpacing = targetSpacing > 0 ? (float)targetSpacing : 200f;
+            switch (densityMode)
+            {
+                case StopDensityMode.Ultra:
+                    effectiveSpacing = 130f;
+                    break;
+                case StopDensityMode.Dense:
+                    effectiveSpacing = 170f;
+                    break;
+                case StopDensityMode.Balanced:
+                    effectiveSpacing = 220f;
+                    break;
+                case StopDensityMode.Low:
+                    effectiveSpacing = 320f;
+                    break;
+                case StopDensityMode.Custom:
+                    effectiveSpacing = math.clamp(targetSpacing, 60, 500);
+                    break;
+            }
+
+            var corridors = BuildCorridors();
+            var blockSpans = BuildBlockSpans(corridors);
+
+            // Filter spans by district if active
+            if (districtFilter != Entity.Null)
+            {
+                var districtSpans = new List<BlockSpan>();
+                for (int s = 0; s < blockSpans.Count; s++)
+                {
+                    var span = blockSpans[s];
+                    if (IsSpanInDistrict(span, districtFilter))
+                    {
+                        districtSpans.Add(span);
+                    }
+                }
+                blockSpans = districtSpans;
+            }
+
+            log.Info($"[PlaceStopsOnly] Target District: '{districtName}', Matching Spans: {blockSpans.Count}, Effective Spacing: {effectiveSpacing:F0}m, Model: '{stopModel}'");
+
+            var allExistingStops = DiscoverExistingBusStops(out var existingStopsByRoad);
+            var committedStops = new List<CommittedStopInfo>();
+
+            for (int e = 0; e < allExistingStops.Count; e++)
+            {
+                committedStops.Add(new CommittedStopInfo
+                {
+                    Position = allExistingStops[e].Position,
+                    Forward = allExistingStops[e].Forward,
+                    CorridorIndex = allExistingStops[e].CorridorIndex,
+                    SpanId = -1
+                });
+            }
+
+            var exclusionPositions = new List<float3>();
+            if (_depotFinder != null && _depotFinder.AllHubs.IsCreated)
+            {
+                for (int h = 0; h < _depotFinder.AllHubs.Length; h++)
+                    exclusionPositions.Add(_depotFinder.AllHubs[h].Position);
+            }
+
+            bool excludeDeadEnds = Mod.setting != null ? Mod.setting.ExcludeDeadEnds : true;
+            float deadEndThreshold = Mod.setting != null ? (float)Mod.setting.DeadEndDistanceThreshold : 300f;
+            float minSpanLength = math.max(45.0f, effectiveSpacing * 0.25f);
+            var rng = new Unity.Mathematics.Random((uint)Environment.TickCount);
+
+            int totalStopsPlaced = 0;
+            int existingReused = 0;
+
+            for (int s = 0; s < blockSpans.Count; s++)
+            {
+                var span = blockSpans[s];
+                if (span.TotalLength < minSpanLength)
+                    continue;
+
+                if (excludeDeadEnds && span.IsDeadEnd)
+                {
+                    float effectiveLength = math.max(span.DeadEndBranchLength, span.TotalLength);
+                    if (effectiveLength < deadEndThreshold)
+                        continue;
+                }
+
+                bool isNearHub = false;
+                for (int ep = 0; ep < exclusionPositions.Count; ep++)
+                {
+                    if (math.distance(span.MidPosition, exclusionPositions[ep]) < HUB_EXCLUSION_RADIUS)
+                    {
+                        isNearHub = true;
+                        break;
+                    }
+                }
+                if (isNearHub)
+                    continue;
+
+                if (TryFindExistingStopOnSpan(span, existingStopsByRoad, out var existingStop))
+                {
+                    existingReused++;
+                    continue;
+                }
+
+                int numStops = math.max(1, (int)math.round(span.TotalLength / effectiveSpacing));
+                for (int stopIdx = 0; stopIdx < numStops; stopIdx++)
+                {
+                    float targetDist = (span.TotalLength * (stopIdx + 1)) / (numStops + 1);
+                    if (TryGetSpanPointAtDistance(span, targetDist, out Entity edgeEntity, out float t, out float3 pos, out float3 tangent))
+                    {
+                        if (TryPlaceAlternatingKerbStop(span, edgeEntity, t, pos, tangent,
+                                                        stopIdx, committedStops, candidatePrefabs,
+                                                        ref rng, minSpacingCap: 50.0f, planOnly: false,
+                                                        currentGlobalStopCount: totalStopsPlaced,
+                                                        out PlacedStop placedStop))
+                        {
+                            committedStops.Add(new CommittedStopInfo
+                            {
+                                Position = placedStop.Position,
+                                Forward = placedStop.Forward,
+                                CorridorIndex = span.CorridorIndex,
+                                SpanId = span.SpanId
+                            });
+
+                            if (!existingStopsByRoad.TryGetValue(edgeEntity, out var list))
+                            {
+                                list = new List<PlacedStop>();
+                                existingStopsByRoad[edgeEntity] = list;
+                            }
+                            list.Add(placedStop);
+
+                            totalStopsPlaced++;
+                        }
+                    }
+                }
+            }
+
+            log.Info($"[PlaceStopsOnly] Finished placing {totalStopsPlaced} roadside bus stops in '{districtName}' ({existingReused} pre-existing stops preserved).");
+            return (totalStopsPlaced, existingReused, districtName);
+        }
+
+        public (int deletedCount, string districtName) ClearUnusedStops(Entity districtFilter)
+        {
+            string districtName = "All City";
+            if (districtFilter != Entity.Null && EntityManager.Exists(districtFilter))
+            {
+                districtName = _nameSystem?.GetRenderedLabelName(districtFilter);
+                if (string.IsNullOrWhiteSpace(districtName))
+                    districtName = $"District {districtFilter.Index}";
+            }
+
+            var stopQuery = GetEntityQuery(
+                ComponentType.ReadOnly<Game.Routes.TransportStop>(),
+                ComponentType.Exclude<Deleted>()
+            );
+
+            int deletedCount = 0;
+            using (var stops = stopQuery.ToEntityArray(Allocator.Temp))
+            {
+                for (int i = 0; i < stops.Length; i++)
+                {
+                    var stopEntity = stops[i];
+                    if (!EntityManager.Exists(stopEntity) || EntityManager.HasComponent<Deleted>(stopEntity))
+                        continue;
+
+                    // Skip permanent stations or depots
+                    if (EntityManager.HasComponent<Game.Buildings.TransportStation>(stopEntity) ||
+                        EntityManager.HasComponent<Game.Buildings.TransportDepot>(stopEntity))
+                        continue;
+
+                    // Skip platform bays owned by a station/depot
+                    if (EntityManager.HasComponent<Game.Common.Owner>(stopEntity))
+                    {
+                        var owner = EntityManager.GetComponentData<Game.Common.Owner>(stopEntity).m_Owner;
+                        if (owner != Entity.Null && (EntityManager.HasComponent<Game.Buildings.TransportStation>(owner) ||
+                                                     EntityManager.HasComponent<Game.Buildings.TransportDepot>(owner)))
+                            continue;
+                    }
+
+                    // Check district membership if filtered
+                    if (districtFilter != Entity.Null)
+                    {
+                        Entity attachedRoad = Entity.Null;
+                        if (EntityManager.HasComponent<Game.Objects.Attached>(stopEntity))
+                        {
+                            attachedRoad = EntityManager.GetComponentData<Game.Objects.Attached>(stopEntity).m_Parent;
+                        }
+                        else if (EntityManager.HasComponent<Game.Common.Owner>(stopEntity))
+                        {
+                            attachedRoad = EntityManager.GetComponentData<Game.Common.Owner>(stopEntity).m_Owner;
+                        }
+
+                        bool inDist = false;
+                        if (EntityManager.HasComponent<CurrentDistrict>(stopEntity))
+                        {
+                            inDist = (EntityManager.GetComponentData<CurrentDistrict>(stopEntity).m_District == districtFilter);
+                        }
+                        if (!inDist && attachedRoad != Entity.Null)
+                        {
+                            inDist = IsRoadInDistrict(attachedRoad, districtFilter);
+                        }
+                        if (!inDist && EntityManager.HasComponent<Game.Objects.Transform>(stopEntity))
+                        {
+                            var tr = EntityManager.GetComponentData<Game.Objects.Transform>(stopEntity);
+                            inDist = IsPointInDistrict(districtFilter, tr.m_Position);
+                        }
+                        if (!inDist)
+                        {
+                            continue;
+                        }
+                    }
+
+                    // Check if this stop has any connected transit routes
+                    if (EntityManager.HasBuffer<ConnectedRoute>(stopEntity))
+                    {
+                        var routes = EntityManager.GetBuffer<ConnectedRoute>(stopEntity);
+                        if (routes.Length > 0)
+                        {
+                            continue; // In use!
+                        }
+                    }
+
+                    EntityManager.AddComponentData(stopEntity, default(Deleted));
+                    EntityManager.AddComponentData(stopEntity, default(Updated));
+                    deletedCount++;
+                }
+            }
+
+            log.Info($"[ClearUnusedStops] Removed {deletedCount} unused roadside bus stops in '{districtName}'.");
+            return (deletedCount, districtName);
         }
     }
 }

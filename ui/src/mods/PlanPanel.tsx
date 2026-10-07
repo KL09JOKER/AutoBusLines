@@ -53,7 +53,17 @@ const targetSpacingBinding = bindValue<number>("autoBusLines", "targetStopSpacin
 const selectedPrefabBinding = bindValue<string>("autoBusLines", "selectedStopPrefab", "All");
 const prefabOptionsBinding = bindValue<string>("autoBusLines", "stopPrefabOptions", "[]");
 
-type TabMode = "plan" | "settings";
+// District & Stops-only bindings
+const districtsListBinding = bindValue<string>("autoBusLines", "districtsList", "[]");
+const selectedDistrictBinding = bindValue<number>("autoBusLines", "selectedDistrict", 0);
+const stopsOnlyStatusBinding = bindValue<string>("autoBusLines", "stopsOnlyStatus", "");
+
+type TabMode = "lines" | "stops" | "settings";
+
+interface DistrictOption {
+    id: number;
+    name: string;
+}
 
 interface ErrorBoundaryProps {
     children: React.ReactNode;
@@ -202,6 +212,68 @@ const SliderInput: React.FC<SliderInputProps> = ({
     );
 };
 
+interface DistrictDropdownProps {
+    selectedId: number;
+    districts: DistrictOption[];
+    onSelect: (id: number) => void;
+}
+
+const DistrictDropdown: React.FC<DistrictDropdownProps> = ({ selectedId, districts, onSelect }) => {
+    const [isOpen, setIsOpen] = useState(false);
+    const validList = Array.isArray(districts) && districts.length > 0 ? districts : [{ id: 0, name: "All City" }];
+    const current = validList.find(d => d && d.id === selectedId) || validList[0];
+
+    return (
+        <div className={styles.dropdownContainer}>
+            <button
+                type="button"
+                className={styles.dropdownToggle}
+                onClick={(e) => {
+                    e.stopPropagation();
+                    setIsOpen(prev => !prev);
+                }}
+            >
+                <span className={styles.dropdownValue}>{current ? current.name : "All City"}</span>
+                <Icon
+                    src="Media/Glyphs/FilledArrowRight.svg"
+                    className={`${styles.dropdownArrow} ${isOpen ? styles.dropdownArrowOpen : ""}`}
+                    tinted={true}
+                />
+            </button>
+            {isOpen && (
+                <>
+                    <div
+                        className={styles.dropdownBackdrop}
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            setIsOpen(false);
+                        }}
+                    />
+                    <div className={styles.dropdownMenu}>
+                        {validList.map(d => (
+                            <button
+                                key={d.id}
+                                type="button"
+                                className={`${styles.dropdownItem} ${d.id === selectedId ? styles.dropdownItemActive : ""}`}
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    onSelect(d.id);
+                                    setIsOpen(false);
+                                }}
+                            >
+                                <span>{d.name}</span>
+                                {d.id === selectedId && (
+                                    <Icon src="Media/Glyphs/Checkmark.svg" className={styles.dropdownCheckIcon} tinted={true} />
+                                )}
+                            </button>
+                        ))}
+                    </div>
+                </>
+            )}
+        </div>
+    );
+};
+
 export const PlanPanel: React.FC<PlanPanelProps> = ({ onClose }) => {
     const planStatus = useValue(planStatusBinding);
     const planJson = useValue(planJsonBinding);
@@ -221,7 +293,12 @@ export const PlanPanel: React.FC<PlanPanelProps> = ({ onClose }) => {
     const selectedPrefab = useValue(selectedPrefabBinding);
     const prefabOptionsJson = useValue(prefabOptionsBinding);
 
-    const [activeTab, setActiveTab] = useState<TabMode>("plan");
+    // District & Stops-only values
+    const districtsListJson = useValue(districtsListBinding);
+    const selectedDistrict = useValue(selectedDistrictBinding);
+    const stopsOnlyStatus = useValue(stopsOnlyStatusBinding);
+
+    const [activeTab, setActiveTab] = useState<TabMode>("lines");
     const [expandedRoutes, setExpandedRoutes] = useState<Record<number, boolean>>({});
     const [position, setPosition] = useState({ x: 260, y: 90 });
     const [confirmDialog, setConfirmDialog] = useState<{
@@ -229,6 +306,20 @@ export const PlanPanel: React.FC<PlanPanelProps> = ({ onClose }) => {
         message: string;
         action: () => void;
     } | null>(null);
+
+    const districtsList: DistrictOption[] = useMemo(() => {
+        try {
+            const parsed = JSON.parse(districtsListJson);
+            return Array.isArray(parsed) && parsed.length > 0 ? parsed : [{ id: 0, name: "All City" }];
+        } catch {
+            return [{ id: 0, name: "All City" }];
+        }
+    }, [districtsListJson]);
+
+    const selectedDistrictName = useMemo(() => {
+        const found = districtsList.find(d => d.id === selectedDistrict);
+        return found ? found.name : "All City";
+    }, [districtsList, selectedDistrict]);
 
     const routes: PlannedRoute[] = useMemo(() => {
         if (!planJson || planJson === "[]") return [];
@@ -247,10 +338,12 @@ export const PlanPanel: React.FC<PlanPanelProps> = ({ onClose }) => {
         let dist = 0;
 
         for (const route of routes) {
-            if (route.enabled) {
+            if (route && route.enabled) {
                 routeCount++;
-                dist += route.lengthKm;
-                stopCount += route.stops.filter(s => s.enabled).length;
+                dist += route.lengthKm || 0;
+                if (Array.isArray(route.stops)) {
+                    stopCount += route.stops.filter(s => s && s.enabled).length;
+                }
             }
         }
 
@@ -377,7 +470,7 @@ export const PlanPanel: React.FC<PlanPanelProps> = ({ onClose }) => {
             <div className={styles.headerTitleGroup}>
                 <Icon src="Media/Game/Icons/Bus.svg" className={styles.headerIcon} tinted={true} />
                 <span className={styles.headerText}>Auto Bus Lines</span>
-                {planSeed > 0 && activeTab === "plan" && (
+                {planSeed > 0 && activeTab === "lines" && (
                     <span className={styles.badge}>Variant #{planSeed + 1}</span>
                 )}
             </div>
@@ -385,10 +478,17 @@ export const PlanPanel: React.FC<PlanPanelProps> = ({ onClose }) => {
                 <div className={styles.tabBar}>
                     <button
                         type="button"
-                        className={`${styles.tabBtn} ${activeTab === "plan" ? styles.tabActive : ""}`}
-                        onClick={(e) => { e.stopPropagation(); setActiveTab("plan"); }}
+                        className={`${styles.tabBtn} ${activeTab === "lines" ? styles.tabActive : ""}`}
+                        onClick={(e) => { e.stopPropagation(); setActiveTab("lines"); }}
                     >
-                        Plan
+                        Lines
+                    </button>
+                    <button
+                        type="button"
+                        className={`${styles.tabBtn} ${activeTab === "stops" ? styles.tabActive : ""}`}
+                        onClick={(e) => { e.stopPropagation(); setActiveTab("stops"); }}
+                    >
+                        Stops
                     </button>
                     <button
                         type="button"
@@ -407,6 +507,250 @@ export const PlanPanel: React.FC<PlanPanelProps> = ({ onClose }) => {
                 </Button>
             </div>
         </div>
+    );
+
+    const renderDistrictSelector = (subtext: string) => (
+        <div className={styles.districtRow}>
+            <div className={styles.districtLabelGroup}>
+                <span className={styles.districtLabel}>District Area Scope</span>
+                <span className={styles.districtSubtext}>{subtext}</span>
+            </div>
+            <DistrictDropdown
+                selectedId={selectedDistrict}
+                districts={districtsList}
+                onSelect={(id) => trigger("autoBusLines", "setSelectedDistrict", id)}
+            />
+        </div>
+    );
+
+    const renderPrefabGrid = () => (
+        <div className={styles.prefabGrid}>
+            {prefabOptions.map((opt) => {
+                const isSelected = (opt.name === "All" && (!selectedPrefab || selectedPrefab === "All")) || selectedPrefab === opt.name;
+                const model = getBusStopModelInfo(opt.name, opt.icon);
+                return (
+                    <div
+                        key={opt.name}
+                        className={`${styles.prefabCard} ${isSelected ? styles.prefabActive : ""}`}
+                        onClick={() => trigger("autoBusLines", "setStopPrefab", opt.name)}
+                    >
+                        <div className={styles.prefabThumbnail}>
+                            {model.image.startsWith("data:") ? (
+                                <img src={model.image} className={styles.prefabModelImg} alt={model.title} />
+                            ) : (
+                                <div className={styles.prefabLogoWrapper}>
+                                    <Icon src={model.image} className={styles.prefabLogoIcon} />
+                                </div>
+                            )}
+                        </div>
+                        <div className={styles.prefabInfo}>
+                            <span className={styles.prefabName}>{model.title}</span>
+                            <span className={styles.prefabSubtitle}>{model.subtitle}</span>
+                        </div>
+                        {opt.name !== "All" ? (
+                            <span className={`${styles.prefabTag} ${model.isCustom ? styles.prefabTagCustom : ""}`}>
+                                {opt.name}
+                            </span>
+                        ) : (
+                            <span className={`${styles.prefabTag} ${styles.prefabTagAll}`}>Random</span>
+                        )}
+                    </div>
+                );
+            })}
+        </div>
+    );
+
+    const renderStopsGenerator = () => (
+        <Scrollable vertical trackVisibility="always" className={styles.settingsScrollable}>
+            <div className={styles.settingsList}>
+                <div className={styles.infoBanner}>
+                    <Icon src="Media/Game/Icons/BusStop.svg" className={styles.headerIcon} tinted={true} />
+                    <span>
+                        Generate roadside bus stops along streets without drawing transit routes or requiring bus depots.
+                        Place stops across your district and assign lines manually whenever you are ready.
+                    </span>
+                </div>
+
+                {/* District Filter */}
+                <div className={styles.settingsGroup}>
+                    <div className={styles.settingsGroupTitle}>Target District / Area</div>
+                    {renderDistrictSelector("Scope stop placement and cleanup to a specific district or citywide")}
+                </div>
+
+                {/* Spacing & Density Configuration */}
+                <div className={styles.settingsGroup}>
+                    <div className={styles.settingsGroupTitle}>Stop Density & Spacing</div>
+
+                    <div className={styles.settingsRow}>
+                        <div className={styles.settingInfo}>
+                            <span className={styles.settingTitle}>Stop Density</span>
+                            <span className={styles.settingDesc}>
+                                Corridor placement frequency.
+                            </span>
+                        </div>
+                        <div className={styles.settingControl}>
+                            <div className={styles.pillGroup}>
+                                {densityModes.map((mode) => (
+                                    <button
+                                        key={mode}
+                                        type="button"
+                                        className={`${styles.pillBtn} ${(stopDensity || "Balanced").toLowerCase() === mode.toLowerCase() ? styles.pillActive : ""}`}
+                                        onClick={() => trigger("autoBusLines", "setStopDensity", mode)}
+                                    >
+                                        {mode}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className={styles.settingsRowStacked}>
+                        <div className={styles.settingInfo}>
+                            <span className={styles.settingTitle}>Target Stop Spacing</span>
+                            <span className={styles.settingDesc}>
+                                Spacing interval between bus stops along road corridors.
+                            </span>
+                        </div>
+                        <SliderInput
+                            value={targetSpacing || 200}
+                            min={60}
+                            max={500}
+                            step={10}
+                            unit="m"
+                            multiplier={1}
+                            onChange={(val) => trigger("autoBusLines", "setTargetSpacing", val)}
+                        />
+                        <div className={styles.presetGroup}>
+                            {[75, 120, 200, 350].map((dist) => (
+                                <button
+                                    key={dist}
+                                    type="button"
+                                    className={`${styles.presetBtn} ${targetSpacing === dist ? styles.presetActive : ""}`}
+                                    onClick={() => trigger("autoBusLines", "setTargetSpacing", dist)}
+                                >
+                                    {dist}m
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className={styles.settingsRow}>
+                        <div className={styles.settingInfo}>
+                            <span className={styles.settingTitle}>Prevent Dead End Stops</span>
+                            <span className={styles.settingDesc}>
+                                Skip cul-de-sacs and dead-end streets to prevent problematic bus turns.
+                            </span>
+                        </div>
+                        <div className={styles.settingControl}>
+                            <Checkbox
+                                isChecked={excludeDeadEnds}
+                                onValueToggle={(checked) => trigger("autoBusLines", "setExcludeDeadEnds", checked)}
+                            />
+                        </div>
+                    </div>
+
+                    {excludeDeadEnds && (
+                        <div className={styles.settingsRowStacked}>
+                            <div className={styles.settingInfo}>
+                                <span className={styles.settingTitle}>Long Dead End Threshold</span>
+                                <span className={styles.settingDesc}>
+                                    Allow bus stops on dead-end roads if their length exceeds this distance.
+                                </span>
+                            </div>
+                            <SliderInput
+                                value={deadEndThreshold || 300}
+                                min={50}
+                                max={2000}
+                                step={25}
+                                unit="m"
+                                multiplier={1}
+                                onChange={(val) => trigger("autoBusLines", "setDeadEndThreshold", val)}
+                            />
+                            <div className={styles.presetGroup}>
+                                {[100, 200, 350, 500, 800].map((dist) => (
+                                    <button
+                                        key={dist}
+                                        type="button"
+                                        className={`${styles.presetBtn} ${deadEndThreshold === dist ? styles.presetActive : ""}`}
+                                        onClick={() => trigger("autoBusLines", "setDeadEndThreshold", dist)}
+                                    >
+                                        {dist}m
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                {/* Bus Stop Model Picker */}
+                <div className={styles.settingsGroup}>
+                    <div className={styles.settingsGroupTitle}>Bus Stop Model</div>
+                    {renderPrefabGrid()}
+                </div>
+
+                {/* Stop Placement Actions */}
+                <div className={styles.settingsGroup}>
+                    <div className={styles.settingsGroupTitle}>Stops Generator Actions</div>
+
+                    <div className={styles.actionGrid}>
+                        <div className={styles.actionCard}>
+                            <div className={styles.actionCardLeft}>
+                                <div className={`${styles.actionBadge} ${styles.actionBadgeScan}`}>
+                                    <Icon src="Media/Game/Icons/BusStop.svg" className={styles.actionBadgeIcon} tinted={true} />
+                                </div>
+                                <div className={styles.actionCardTexts}>
+                                    <span className={styles.actionCardTitle}>Place Stops in Area</span>
+                                    <span className={styles.actionCardDesc}>
+                                        Place curbside bus stops along roads in {selectedDistrictName} without creating transit routes.
+                                    </span>
+                                </div>
+                            </div>
+                            <Button
+                                variant="primary"
+                                className={`${styles.maintBtn} ${styles.scanBtn}`}
+                                onSelect={() => trigger("autoBusLines", "placeStopsOnly")}
+                            >
+                                <Icon src="Media/Game/Icons/BusStop.svg" className={styles.maintBtnIcon} tinted={true} />
+                                <span>Place Stops</span>
+                            </Button>
+                        </div>
+
+                        <div className={styles.actionCard}>
+                            <div className={styles.actionCardLeft}>
+                                <div className={`${styles.actionBadge} ${styles.actionBadgeDelete}`}>
+                                    <Icon src="Media/Glyphs/Trash.svg" className={styles.actionBadgeIcon} tinted={true} />
+                                </div>
+                                <div className={styles.actionCardTexts}>
+                                    <span className={styles.actionCardTitle}>Clear Unused Stops</span>
+                                    <span className={styles.actionCardDesc}>
+                                        Remove orphaned roadside bus stops in {selectedDistrictName} that have no active transit lines.
+                                    </span>
+                                </div>
+                            </div>
+                            <Button
+                                variant="flat"
+                                className={`${styles.maintBtn} ${styles.deleteBtn}`}
+                                onSelect={() => confirmAndExecute(
+                                    "Clear Unused Bus Stops",
+                                    `Remove all roadside bus stops in "${selectedDistrictName}" that are not currently assigned to any transit line? Stations and depots will be preserved.`,
+                                    () => trigger("autoBusLines", "clearUnusedStops")
+                                )}
+                            >
+                                <Icon src="Media/Glyphs/Trash.svg" className={styles.maintBtnIcon} tinted={true} />
+                                <span>Clear Unused</span>
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+
+                {stopsOnlyStatus && (
+                    <div className={styles.successBanner}>
+                        <Icon src="Media/Glyphs/Checkmark.svg" className={styles.maintBtnIcon} tinted={true} />
+                        <span>{stopsOnlyStatus}</span>
+                    </div>
+                )}
+            </div>
+        </Scrollable>
     );
 
     const renderSettings = () => (
@@ -535,9 +879,9 @@ export const PlanPanel: React.FC<PlanPanelProps> = ({ onClose }) => {
                     </div>
                 </div>
 
-                {/* Stop Placement & Spacing */}
+                {/* Stop Placement Defaults */}
                 <div className={styles.settingsGroup}>
-                    <div className={styles.settingsGroupTitle}>Stop Placement & Spacing</div>
+                    <div className={styles.settingsGroupTitle}>Default Stop Placement & Spacing</div>
 
                     <div className={styles.settingsRow}>
                         <div className={styles.settingInfo}>
@@ -646,40 +990,7 @@ export const PlanPanel: React.FC<PlanPanelProps> = ({ onClose }) => {
                                 Select a specific bus stop prefab model or randomized mix.
                             </span>
                         </div>
-                        <div className={styles.prefabGrid}>
-                            {prefabOptions.map((opt) => {
-                                const isSelected = (opt.name === "All" && (!selectedPrefab || selectedPrefab === "All")) || selectedPrefab === opt.name;
-                                const model = getBusStopModelInfo(opt.name, opt.icon);
-                                return (
-                                    <div
-                                        key={opt.name}
-                                        className={`${styles.prefabCard} ${isSelected ? styles.prefabActive : ""}`}
-                                        onClick={() => trigger("autoBusLines", "setStopPrefab", opt.name)}
-                                    >
-                                        <div className={styles.prefabThumbnail}>
-                                            {model.image.startsWith("data:") ? (
-                                                <img src={model.image} className={styles.prefabModelImg} alt={model.title} />
-                                            ) : (
-                                                <div className={styles.prefabLogoWrapper}>
-                                                    <Icon src={model.image} className={styles.prefabLogoIcon} />
-                                                </div>
-                                            )}
-                                        </div>
-                                        <div className={styles.prefabInfo}>
-                                            <span className={styles.prefabName}>{model.title}</span>
-                                            <span className={styles.prefabSubtitle}>{model.subtitle}</span>
-                                        </div>
-                                        {opt.name !== "All" ? (
-                                            <span className={`${styles.prefabTag} ${model.isCustom ? styles.prefabTagCustom : ""}`}>
-                                                {opt.name}
-                                            </span>
-                                        ) : (
-                                            <span className={`${styles.prefabTag} ${styles.prefabTagAll}`}>Random</span>
-                                        )}
-                                    </div>
-                                );
-                            })}
-                        </div>
+                        {renderPrefabGrid()}
                     </div>
                 </div>
 
@@ -688,7 +999,6 @@ export const PlanPanel: React.FC<PlanPanelProps> = ({ onClose }) => {
                     <div className={styles.settingsGroupTitle}>Network Maintenance & Tools</div>
 
                     <div className={styles.actionGrid}>
-
                         <div className={styles.actionCard}>
                             <div className={styles.actionCardLeft}>
                                 <div className={`${styles.actionBadge} ${styles.actionBadgeRepair}`}>
@@ -738,237 +1048,261 @@ export const PlanPanel: React.FC<PlanPanelProps> = ({ onClose }) => {
                         </div>
                     </div>
                 </div>
+
+                <div style={{ textAlign: "center", padding: "10rem 0 4rem 0", color: "#718096", fontSize: "11rem", fontWeight: 500 }}>
+                    Auto Bus Lines v2.0.3 · Cities: Skylines II
+                </div>
             </div>
         </Scrollable>
+    );
+
+    const renderEmptyPlanState = () => (
+        <div className={styles.emptyState}>
+            <div className={styles.emptyTitle}>
+                {planStatus === "planning"
+                    ? "Analyzing City & Planning Routes..."
+                    : "No Active Transit Plan"}
+            </div>
+            <div className={styles.emptyDesc}>
+                {planStatus === "planning"
+                    ? "Examining road network corridors, curbside bus stop candidates, and depot loop connections."
+                    : "Select a district scope and click below to scan roads and preview proposed bus lines before building."}
+            </div>
+            {planStatus !== "planning" && (
+                <>
+                    <div style={{ width: "100%", maxWidth: "420rem", marginBottom: "8rem" }}>
+                        {renderDistrictSelector("Choose a specific district to plan lines for, or plan city-wide")}
+                    </div>
+
+                    <div className={styles.settingsHintBanner}>
+                        <div className={styles.settingsHintLeft}>
+                            <div className={styles.settingsHintBadge}>
+                                <Icon src="Media/Game/Icons/BusStop.svg" className={styles.settingsHintIcon} tinted={true} />
+                            </div>
+                            <div className={styles.settingsHintTexts}>
+                                <span className={styles.settingsHintTitle}>Need Bus Stops Only?</span>
+                                <span className={styles.settingsHintDesc}>
+                                    Switch to the Stops tab to generate standalone bus stops without automated routes.
+                                </span>
+                            </div>
+                        </div>
+                        <Button
+                            variant="flat"
+                            className={styles.settingsHintBtn}
+                            onSelect={() => setActiveTab("stops")}
+                        >
+                            <Icon src="Media/Game/Icons/BusStop.svg" className={styles.settingsHintBtnIcon} tinted={true} />
+                            <span>Stops Tab</span>
+                        </Button>
+                    </div>
+
+                    <Button
+                        variant="primary"
+                        className={styles.calculateBtn}
+                        onSelect={handleGenerateInitial}
+                    >
+                        Calculate Transit Plan
+                    </Button>
+                </>
+            )}
+            {statusMessage && (
+                <div className={styles.statusBanner}>{statusMessage}</div>
+            )}
+        </div>
+    );
+
+    const renderRoutesList = () => (
+        <>
+            <div style={{ marginBottom: "8rem" }}>
+                {renderDistrictSelector("Currently scoped district for planned lines")}
+            </div>
+
+            {/* Stats Summary */}
+            <div className={styles.statsRow}>
+                <div className={styles.statItem}>
+                    <span className={styles.statLabel}>Selected Lines</span>
+                    <span className={styles.statValue}>
+                        {enabledRouteCount} / {routes.length}
+                    </span>
+                </div>
+                <div className={styles.statItem}>
+                    <span className={styles.statLabel}>Active Stops</span>
+                    <span className={styles.statValue}>{enabledStopCount}</span>
+                </div>
+                <div className={styles.statItem}>
+                    <span className={styles.statLabel}>Coverage</span>
+                    <span className={styles.statValue}>{totalDistanceKm} km</span>
+                </div>
+            </div>
+
+            {/* Actions Toolbar */}
+            <div className={styles.actionToolbar}>
+                <Tooltip tooltip="Calculate an alternative layout with different corridor pairings">
+                    <Button
+                        variant="flat"
+                        className={styles.actionBtn}
+                        onSelect={handleNewPlan}
+                        disabled={planStatus === "planning" || planStatus === "building"}
+                    >
+                        New Plan
+                    </Button>
+                </Tooltip>
+
+                <Tooltip tooltip="Open Settings to adjust stop models, spacing, and constraints">
+                    <Button
+                        variant="flat"
+                        className={styles.actionBtn}
+                        onSelect={() => setActiveTab("settings")}
+                        disabled={planStatus === "building"}
+                    >
+                        <Icon src="Media/Glyphs/Gear.svg" className={styles.actionBtnIcon} tinted={true} />
+                        <span>Settings</span>
+                    </Button>
+                </Tooltip>
+
+                <Tooltip tooltip="Discard current plan without placing any entities">
+                    <Button
+                        variant="flat"
+                        className={styles.actionBtn}
+                        onSelect={handleDiscard}
+                        disabled={planStatus === "building"}
+                    >
+                        Discard
+                    </Button>
+                </Tooltip>
+
+                <Tooltip tooltip="Construct only the enabled routes and checked stops">
+                    <Button
+                        variant="primary"
+                        className={styles.buildBtn}
+                        onSelect={handleBuildSelected}
+                        disabled={enabledRouteCount === 0 || planStatus === "building"}
+                    >
+                        {planStatus === "building" ? "Building..." : `Build Selected (${enabledRouteCount})`}
+                    </Button>
+                </Tooltip>
+            </div>
+
+            {statusMessage && (
+                <div className={styles.statusBanner}>{statusMessage}</div>
+            )}
+
+            {/* Scrollable Routes List */}
+            <Scrollable vertical trackVisibility="always" className={styles.scrollable}>
+                <div className={styles.routeList}>
+                    {routes.map(route => {
+                        const isExpanded = !!expandedRoutes[route.id];
+                        const routeStops = Array.isArray(route.stops) ? route.stops : [];
+                        const activeStops = routeStops.filter(s => s && s.enabled).length;
+
+                        return (
+                            <div
+                                key={route.id}
+                                className={`${styles.routeCard} ${!route.enabled ? styles.disabled : ""}`}
+                                onMouseEnter={() => trigger("autoBusLines", "hoverRoute", route.id)}
+                                onMouseLeave={() => trigger("autoBusLines", "hoverRoute", 0)}
+                            >
+                                <div
+                                    className={styles.routeHeader}
+                                    onClick={() => toggleExpand(route.id)}
+                                >
+                                    <Checkbox
+                                        isChecked={route.enabled}
+                                        onValueToggle={() => handleToggleRoute(route.id, route.enabled)}
+                                    />
+                                    <div
+                                        className={styles.colorBar}
+                                        style={{ backgroundColor: route.color }}
+                                    />
+                                    <div className={styles.routeInfo}>
+                                        <span className={styles.routeName}>{route.name}</span>
+                                        <span className={styles.routeSub}>
+                                            {activeStops} stops · {route.lengthKm} km
+                                        </span>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        className={styles.expandBtn}
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            toggleExpand(route.id);
+                                        }}
+                                    >
+                                        <Icon
+                                            src="Media/Glyphs/FilledArrowRight.svg"
+                                            className={`${styles.expandIcon} ${isExpanded ? styles.expanded : ""}`}
+                                            tinted={true}
+                                        />
+                                    </button>
+                                </div>
+
+                                {isExpanded && (
+                                    <div className={styles.stopList}>
+                                        {routeStops.map(stop => (
+                                            <div
+                                                key={stop.index}
+                                                className={`${styles.stopRow} ${!stop.enabled || !route.enabled ? styles.disabled : ""}`}
+                                                onMouseEnter={() => trigger("autoBusLines", "hoverStop", route.id, stop.index)}
+                                                onMouseLeave={() => trigger("autoBusLines", "hoverStop", 0, -1)}
+                                            >
+                                                <Checkbox
+                                                    isChecked={stop.enabled}
+                                                    onValueToggle={() => handleToggleStop(route.id, stop.index, stop.enabled)}
+                                                />
+                                                <span className={styles.stopIndex}>#{stop.index}</span>
+                                                <span className={styles.stopName}>{stop.name}</span>
+                                                {stop.isStationBay && (
+                                                    <span className={`${styles.stopTag} ${styles.stationBay}`}>Terminal</span>
+                                                )}
+                                                {stop.isPreExisting && !stop.isStationBay && (
+                                                    <span className={`${styles.stopTag} ${styles.existing}`}>Existing</span>
+                                                )}
+                                                <Tooltip tooltip="Center camera on stop">
+                                                    <Button
+                                                        variant="icon"
+                                                        className={styles.focusBtn}
+                                                        onSelect={() => handleFocusStop(stop)}
+                                                    >
+                                                        <Icon
+                                                            src="Media/Game/Icons/MapMarker.svg"
+                                                            className={styles.focusIcon}
+                                                            tinted={true}
+                                                        />
+                                                    </Button>
+                                                </Tooltip>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+            </Scrollable>
+        </>
     );
 
     return (
         <>
             <Panel
                 className={styles.panel}
-            style={{ left: `${position.x}px`, top: `${position.y}px` }}
-            header={headerContent}
-        >
-            <div className={styles.container}>
-                <ErrorBoundary>
-                    {activeTab === "settings" ? (
-                        renderSettings()
-                    ) : routes.length === 0 ? (
-                    <div className={styles.emptyState}>
-                        <div className={styles.emptyTitle}>
-                            {planStatus === "planning"
-                                ? "Analyzing City & Planning Routes..."
-                                : "No Active Transit Plan"}
-                        </div>
-                        <div className={styles.emptyDesc}>
-                            {planStatus === "planning"
-                                ? "Examining road network corridors, curbside bus stop candidates, and depot loop connections."
-                                : "Click below to scan your road network and preview proposed bus lines and stops before building."}
-                        </div>
-                        {planStatus !== "planning" && (
-                            <>
-                                <div className={styles.settingsHintBanner}>
-                                    <div className={styles.settingsHintLeft}>
-                                        <div className={styles.settingsHintBadge}>
-                                            <Icon src="Media/Glyphs/Gear.svg" className={styles.settingsHintIcon} tinted={true} />
-                                        </div>
-                                        <div className={styles.settingsHintTexts}>
-                                            <span className={styles.settingsHintTitle}>Configure Preferences First</span>
-                                            <span className={styles.settingsHintDesc}>
-                                                Choose your bus stop model, stop density, and route length in Settings before calculating a plan.
-                                            </span>
-                                        </div>
-                                    </div>
-                                    <Button
-                                        variant="flat"
-                                        className={styles.settingsHintBtn}
-                                        onSelect={() => setActiveTab("settings")}
-                                    >
-                                        <Icon src="Media/Glyphs/Gear.svg" className={styles.settingsHintBtnIcon} tinted={true} />
-                                        <span>Open Settings</span>
-                                    </Button>
-                                </div>
-                                <Button
-                                    variant="primary"
-                                    className={styles.calculateBtn}
-                                    onSelect={handleGenerateInitial}
-                                >
-                                    Calculate Transit Plan
-                                </Button>
-                            </>
+                style={{ left: `${position.x}px`, top: `${position.y}px` }}
+                header={headerContent}
+            >
+                <div className={styles.container}>
+                    <ErrorBoundary>
+                        {activeTab === "settings" ? (
+                            renderSettings()
+                        ) : activeTab === "stops" ? (
+                            renderStopsGenerator()
+                        ) : routes.length === 0 ? (
+                            renderEmptyPlanState()
+                        ) : (
+                            renderRoutesList()
                         )}
-                        {statusMessage && (
-                            <div className={styles.statusBanner}>{statusMessage}</div>
-                        )}
-                    </div>
-                ) : (
-                    <>
-                        {/* Stats Summary */}
-                        <div className={styles.statsRow}>
-                            <div className={styles.statItem}>
-                                <span className={styles.statLabel}>Selected Lines</span>
-                                <span className={styles.statValue}>
-                                    {enabledRouteCount} / {routes.length}
-                                </span>
-                            </div>
-                            <div className={styles.statItem}>
-                                <span className={styles.statLabel}>Active Stops</span>
-                                <span className={styles.statValue}>{enabledStopCount}</span>
-                            </div>
-                            <div className={styles.statItem}>
-                                <span className={styles.statLabel}>Coverage</span>
-                                <span className={styles.statValue}>{totalDistanceKm} km</span>
-                            </div>
-                        </div>
-
-                        {/* Actions Toolbar */}
-                        <div className={styles.actionToolbar}>
-                            <Tooltip tooltip="Calculate an alternative layout with different corridor pairings">
-                                <Button
-                                    variant="flat"
-                                    className={styles.actionBtn}
-                                    onSelect={handleNewPlan}
-                                    disabled={planStatus === "planning" || planStatus === "building"}
-                                >
-                                    New Plan
-                                </Button>
-                            </Tooltip>
-
-                            <Tooltip tooltip="Open Settings to adjust stop models, spacing, and constraints">
-                                <Button
-                                    variant="flat"
-                                    className={styles.actionBtn}
-                                    onSelect={() => setActiveTab("settings")}
-                                    disabled={planStatus === "building"}
-                                >
-                                    <Icon src="Media/Glyphs/Gear.svg" className={styles.actionBtnIcon} tinted={true} />
-                                    <span>Settings</span>
-                                </Button>
-                            </Tooltip>
-
-                            <Tooltip tooltip="Discard current plan without placing any entities">
-                                <Button
-                                    variant="flat"
-                                    className={styles.actionBtn}
-                                    onSelect={handleDiscard}
-                                    disabled={planStatus === "building"}
-                                >
-                                    Discard
-                                </Button>
-                            </Tooltip>
-
-                            <Tooltip tooltip="Construct only the enabled routes and checked stops">
-                                <Button
-                                    variant="primary"
-                                    className={styles.buildBtn}
-                                    onSelect={handleBuildSelected}
-                                    disabled={enabledRouteCount === 0 || planStatus === "building"}
-                                >
-                                    {planStatus === "building" ? "Building..." : `Build Selected (${enabledRouteCount})`}
-                                </Button>
-                            </Tooltip>
-                        </div>
-
-                        {statusMessage && (
-                            <div className={styles.statusBanner}>{statusMessage}</div>
-                        )}
-
-                        {/* Scrollable Routes List */}
-                        <Scrollable vertical trackVisibility="always" className={styles.scrollable}>
-                            <div className={styles.routeList}>
-                                {routes.map(route => {
-                                    const isExpanded = !!expandedRoutes[route.id];
-                                    const activeStops = route.stops.filter(s => s.enabled).length;
-
-                                    return (
-                                        <div
-                                            key={route.id}
-                                            className={`${styles.routeCard} ${!route.enabled ? styles.disabled : ""}`}
-                                            onMouseEnter={() => trigger("autoBusLines", "hoverRoute", route.id)}
-                                            onMouseLeave={() => trigger("autoBusLines", "hoverRoute", 0)}
-                                        >
-                                            <div
-                                                className={styles.routeHeader}
-                                                onClick={() => toggleExpand(route.id)}
-                                            >
-                                                <Checkbox
-                                                    isChecked={route.enabled}
-                                                    onValueToggle={() => handleToggleRoute(route.id, route.enabled)}
-                                                />
-                                                <div
-                                                    className={styles.colorBar}
-                                                    style={{ backgroundColor: route.color }}
-                                                />
-                                                <div className={styles.routeInfo}>
-                                                    <span className={styles.routeName}>{route.name}</span>
-                                                    <span className={styles.routeSub}>
-                                                        {activeStops} stops · {route.lengthKm} km
-                                                    </span>
-                                                </div>
-                                                <button
-                                                    type="button"
-                                                    className={styles.expandBtn}
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        toggleExpand(route.id);
-                                                    }}
-                                                >
-                                                    <Icon
-                                                        src="Media/Glyphs/FilledArrowRight.svg"
-                                                        className={`${styles.expandIcon} ${isExpanded ? styles.expanded : ""}`}
-                                                        tinted={true}
-                                                    />
-                                                </button>
-                                            </div>
-
-                                            {isExpanded && (
-                                                <div className={styles.stopList}>
-                                                    {route.stops.map(stop => (
-                                                        <div
-                                                            key={stop.index}
-                                                            className={`${styles.stopRow} ${!stop.enabled || !route.enabled ? styles.disabled : ""}`}
-                                                            onMouseEnter={() => trigger("autoBusLines", "hoverStop", route.id, stop.index)}
-                                                            onMouseLeave={() => trigger("autoBusLines", "hoverStop", 0, -1)}
-                                                        >
-                                                            <Checkbox
-                                                                isChecked={stop.enabled}
-                                                                onValueToggle={() => handleToggleStop(route.id, stop.index, stop.enabled)}
-                                                            />
-                                                            <span className={styles.stopIndex}>#{stop.index}</span>
-                                                            <span className={styles.stopName}>{stop.name}</span>
-                                                            {stop.isStationBay && (
-                                                                <span className={`${styles.stopTag} ${styles.stationBay}`}>Terminal</span>
-                                                            )}
-                                                            {stop.isPreExisting && !stop.isStationBay && (
-                                                                <span className={`${styles.stopTag} ${styles.existing}`}>Existing</span>
-                                                            )}
-                                                            <Tooltip tooltip="Center camera on stop">
-                                                                <Button
-                                                                    variant="icon"
-                                                                    className={styles.focusBtn}
-                                                                    onSelect={() => handleFocusStop(stop)}
-                                                                >
-                                                                    <Icon
-                                                                        src="Media/Game/Icons/MapMarker.svg"
-                                                                        className={styles.focusIcon}
-                                                                        tinted={true}
-                                                                    />
-                                                                </Button>
-                                                            </Tooltip>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            )}
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        </Scrollable>
-                    </>
-                )}
-                </ErrorBoundary>
-            </div>
-        </Panel>
+                    </ErrorBoundary>
+                </div>
+            </Panel>
 
         {confirmDialog && (
             <Portal>

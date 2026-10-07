@@ -1,10 +1,11 @@
-// AutoBusLines v2.0.2 - Modular transit planning and generation system
+// AutoBusLines v2.0.3 - Modular transit planning and generation system
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using Colossal.Logging;
 using Colossal.Mathematics;
 using Game;
+using Game.Areas;
 using Game.Common;
 using Game.Net;
 using Game.Notifications;
@@ -29,6 +30,183 @@ namespace AutoBusLines
         public const int ABSOLUTE_MIN_STOPS = 3;
         private const int INDEXING_DELAY_FRAMES = 15;
         private const int ROUTES_PER_FRAME = 2;
+
+        public int TargetDistrictId { get; set; } = 0;
+
+        public Entity FindDistrictEntity(int districtId)
+        {
+            if (districtId <= 0) return Entity.Null;
+
+            var districtQuery = GetEntityQuery(new EntityQueryDesc
+            {
+                All = new ComponentType[]
+                {
+                    ComponentType.ReadOnly<Game.Areas.District>(),
+                    ComponentType.ReadOnly<Game.Areas.Area>(),
+                },
+                None = new ComponentType[]
+                {
+                    ComponentType.ReadOnly<Deleted>(),
+                    ComponentType.ReadOnly<Game.Tools.Temp>(),
+                }
+            });
+
+            if (districtQuery.IsEmptyIgnoreFilter) return Entity.Null;
+
+            using (var entities = districtQuery.ToEntityArray(Allocator.Temp))
+            {
+                for (int i = 0; i < entities.Length; i++)
+                {
+                    if (entities[i].Index == districtId)
+                    {
+                        return entities[i];
+                    }
+                }
+            }
+            return Entity.Null;
+        }
+
+        /// <summary>
+        /// Checks whether a 2D world position lies inside the boundary or area of a given district entity.
+        /// Uses bounding box pre-filtering and exact triangulation buffers (Game.Areas.Node, Game.Areas.Triangle).
+        /// </summary>
+        public bool IsPointInDistrict(Entity districtEntity, float3 worldPos)
+        {
+            if (districtEntity == Entity.Null) return true;
+            if (!EntityManager.Exists(districtEntity)) return false;
+            if (!EntityManager.HasBuffer<Game.Areas.Node>(districtEntity) ||
+                !EntityManager.HasBuffer<Game.Areas.Triangle>(districtEntity))
+                return false;
+
+            var nodes = EntityManager.GetBuffer<Game.Areas.Node>(districtEntity);
+            var triangles = EntityManager.GetBuffer<Game.Areas.Triangle>(districtEntity);
+            if (nodes.Length < 3 || triangles.Length == 0) return false;
+
+            float2 p = worldPos.xz;
+
+            // Fast Bounding Box Pre-Check
+            float minX = float.MaxValue, maxX = float.MinValue;
+            float minZ = float.MaxValue, maxZ = float.MinValue;
+            for (int i = 0; i < nodes.Length; i++)
+            {
+                float2 np = nodes[i].m_Position.xz;
+                if (np.x < minX) minX = np.x;
+                if (np.x > maxX) maxX = np.x;
+                if (np.y < minZ) minZ = np.y;
+                if (np.y > maxZ) maxZ = np.y;
+            }
+
+            // Expand bounds slightly to account for road widths and curb offsets (approx 35m)
+            const float kMargin = 35f;
+            if (p.x < minX - kMargin || p.x > maxX + kMargin ||
+                p.y < minZ - kMargin || p.y > maxZ + kMargin)
+            {
+                return false;
+            }
+
+            // Triangulated area check
+            for (int i = 0; i < triangles.Length; i++)
+            {
+                var tri = triangles[i];
+                if (tri.m_Indices.x < nodes.Length && tri.m_Indices.y < nodes.Length && tri.m_Indices.z < nodes.Length)
+                {
+                    var tri2 = AreaUtils.GetTriangle2(nodes, tri);
+                    if (MathUtils.Intersect(tri2, p))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Checks whether a road edge belongs to or touches the specified district entity.
+        /// Checks BorderDistrict (vanilla road district component), CurrentDistrict, endpoints, and geometry.
+        /// </summary>
+        public bool IsRoadInDistrict(Entity roadEntity, Entity districtEntity)
+        {
+            if (districtEntity == Entity.Null) return true;
+            if (roadEntity == Entity.Null || !EntityManager.Exists(roadEntity)) return false;
+
+            // 1. Check BorderDistrict on road edge (standard CS2 road component)
+            if (EntityManager.HasComponent<BorderDistrict>(roadEntity))
+            {
+                var bd = EntityManager.GetComponentData<BorderDistrict>(roadEntity);
+                if (bd.m_Left == districtEntity || bd.m_Right == districtEntity)
+                    return true;
+            }
+
+            // 2. Check CurrentDistrict on road edge
+            if (EntityManager.HasComponent<CurrentDistrict>(roadEntity))
+            {
+                var cd = EntityManager.GetComponentData<CurrentDistrict>(roadEntity);
+                if (cd.m_District == districtEntity)
+                    return true;
+            }
+
+            // 3. Check start and end nodes of the road edge
+            if (EntityManager.HasComponent<Edge>(roadEntity))
+            {
+                var edge = EntityManager.GetComponentData<Edge>(roadEntity);
+                if (edge.m_Start != Entity.Null && EntityManager.Exists(edge.m_Start))
+                {
+                    if (EntityManager.HasComponent<CurrentDistrict>(edge.m_Start) &&
+                        EntityManager.GetComponentData<CurrentDistrict>(edge.m_Start).m_District == districtEntity)
+                        return true;
+                    if (EntityManager.HasComponent<BorderDistrict>(edge.m_Start))
+                    {
+                        var nbd = EntityManager.GetComponentData<BorderDistrict>(edge.m_Start);
+                        if (nbd.m_Left == districtEntity || nbd.m_Right == districtEntity)
+                            return true;
+                    }
+                }
+                if (edge.m_End != Entity.Null && EntityManager.Exists(edge.m_End))
+                {
+                    if (EntityManager.HasComponent<CurrentDistrict>(edge.m_End) &&
+                        EntityManager.GetComponentData<CurrentDistrict>(edge.m_End).m_District == districtEntity)
+                        return true;
+                    if (EntityManager.HasComponent<BorderDistrict>(edge.m_End))
+                    {
+                        var nbd = EntityManager.GetComponentData<BorderDistrict>(edge.m_End);
+                        if (nbd.m_Left == districtEntity || nbd.m_Right == districtEntity)
+                            return true;
+                    }
+                }
+            }
+
+            // 4. Fallback: Geometric containment via Curve midpoint
+            if (EntityManager.HasComponent<Curve>(roadEntity))
+            {
+                var curve = EntityManager.GetComponentData<Curve>(roadEntity);
+                float3 midPos = MathUtils.Position(curve.m_Bezier, 0.5f);
+                if (IsPointInDistrict(districtEntity, midPos))
+                    return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Checks whether a block span belongs to or touches the specified district entity.
+        /// </summary>
+        private bool IsSpanInDistrict(BlockSpan span, Entity districtEntity)
+        {
+            if (districtEntity == Entity.Null) return true;
+            if (span == null) return false;
+
+            for (int e = 0; e < span.Edges.Count; e++)
+            {
+                if (IsRoadInDistrict(span.Edges[e].EdgeEntity, districtEntity))
+                    return true;
+            }
+
+            if (IsPointInDistrict(districtEntity, span.MidPosition))
+                return true;
+
+            return false;
+        }
 
         private enum GenerationStage
         {
@@ -590,111 +768,7 @@ namespace AutoBusLines
             // -------------------------------------------------------------
             // STEP 0: Discover and Index ALL Existing Bus Stops in the City
             // -------------------------------------------------------------
-            var existingStopsByRoad = new Dictionary<Entity, List<PlacedStop>>();
-            var allExistingStops = new List<PlacedStop>();
-
-            var existingStopEntities = _existingBusStopQuery.ToEntityArray(Allocator.Temp);
-            var existingStopPrefabRefs = _existingBusStopQuery.ToComponentDataArray<PrefabRef>(Allocator.Temp);
-            var existingStopTransforms = _existingBusStopQuery.ToComponentDataArray<Game.Objects.Transform>(Allocator.Temp);
-
-            for (int i = 0; i < existingStopEntities.Length; i++)
-            {
-                var stopEntity = existingStopEntities[i];
-                var prefabEntity = existingStopPrefabRefs[i].m_Prefab;
-
-                if (EntityManager.HasComponent<Game.Objects.OutsideConnection>(stopEntity) ||
-                    EntityManager.HasComponent<Game.Net.OutsideConnection>(stopEntity) ||
-                    EntityManager.HasComponent<Game.Prefabs.OutsideConnectionData>(prefabEntity))
-                {
-                    continue;
-                }
-
-                string pName = GetPrefabName(prefabEntity);
-                if (!string.IsNullOrEmpty(pName) && (
-                    pName.IndexOf("Outside Connection", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    pName.IndexOf("OutsideConnection", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    pName.IndexOf("Placeholder", StringComparison.OrdinalIgnoreCase) >= 0))
-                {
-                    continue;
-                }
-
-                if (!EntityManager.HasComponent<TransportStopData>(prefabEntity))
-                    continue;
-
-                var stopData = EntityManager.GetComponentData<TransportStopData>(prefabEntity);
-                if (stopData.m_TransportType != TransportType.Bus || !stopData.m_PassengerTransport)
-                    continue;
-
-                // Station platform bays are handled separately as hub anchors
-                if (_depotFinder.StationPlatformStops.Contains(stopEntity))
-                    continue;
-
-                var transform = existingStopTransforms[i];
-                float3 stopPos = transform.m_Position;
-                float3 stopForward = math.mul(transform.m_Rotation, new float3(0, 0, 1));
-
-                Entity attachedRoad = Entity.Null;
-                if (EntityManager.HasComponent<Attached>(stopEntity))
-                {
-                    attachedRoad = EntityManager.GetComponentData<Attached>(stopEntity).m_Parent;
-                }
-                else if (EntityManager.HasComponent<Game.Common.Owner>(stopEntity))
-                {
-                    attachedRoad = EntityManager.GetComponentData<Game.Common.Owner>(stopEntity).m_Owner;
-                }
-
-                // If a roadside stop erroneously has Owner(road), strip it so it becomes interactable immediately
-                if (EntityManager.HasComponent<Game.Common.Owner>(stopEntity))
-                {
-                    var owner = EntityManager.GetComponentData<Game.Common.Owner>(stopEntity).m_Owner;
-                    if (owner != Entity.Null && EntityManager.HasComponent<Game.Net.Edge>(owner))
-                    {
-                        EntityManager.RemoveComponent<Game.Common.Owner>(stopEntity);
-                        log.Info($"Healed roadside bus stop {stopEntity.Index}: removed erroneous Owner component to restore interactivity.");
-                    }
-                }
-
-                // Determine nearest Hub
-                Entity nearestHub = Entity.Null;
-                float minHubDist = float.MaxValue;
-
-                for (int h = 0; h < _depotFinder.AllHubs.Length; h++)
-                {
-                    var hub = _depotFinder.AllHubs[h];
-                    float d = math.distance(stopPos, hub.Position);
-                    if (hub.IsStation) d *= 0.85f;
-                    if (d < minHubDist)
-                    {
-                        minHubDist = d;
-                        nearestHub = hub.HubEntity;
-                    }
-                }
-
-                var placed = new PlacedStop
-                {
-                    StopEntity = stopEntity,
-                    Position = stopPos,
-                    Forward = stopForward,
-                    RoadEntity = attachedRoad,
-                    HubEntity = nearestHub,
-                    IsPreExisting = true,
-                    IsStationBay = false
-                };
-
-                allExistingStops.Add(placed);
-
-                if (attachedRoad != Entity.Null)
-                {
-                    if (!existingStopsByRoad.ContainsKey(attachedRoad))
-                        existingStopsByRoad[attachedRoad] = new List<PlacedStop>();
-                    existingStopsByRoad[attachedRoad].Add(placed);
-                }
-            }
-
-            existingStopEntities.Dispose();
-            existingStopPrefabRefs.Dispose();
-            existingStopTransforms.Dispose();
-
+            var allExistingStops = DiscoverExistingBusStops(out var existingStopsByRoad);
             log.Info($"Discovered {allExistingStops.Count} pre-existing bus stops in the city across all neighborhoods");
 
             // -------------------------------------------------------------
@@ -786,11 +860,27 @@ namespace AutoBusLines
             bool excludeDeadEnds = Mod.setting != null ? Mod.setting.ExcludeDeadEnds : true;
             float deadEndThreshold = Mod.setting != null ? (float)Mod.setting.DeadEndDistanceThreshold : 500f;
 
+            Entity districtFilter = FindDistrictEntity(TargetDistrictId);
+            string districtName = districtFilter != Entity.Null ? (_nameSystem?.GetRenderedLabelName(districtFilter) ?? $"District {districtFilter.Index}") : "All City";
+            if (districtFilter != Entity.Null)
+            {
+                log.Info($"[ExecuteGeneration] Scoping transit network generation to District: '{districtName}' (Entity {districtFilter.Index})");
+            }
+
+            int totalDistrictSpans = 0;
             for (int s = 0; s < blockSpans.Count; s++)
             {
                 var span = blockSpans[s];
                 if (span.TotalLength < minSpanLength)
                     continue;
+
+                // Skip spans outside the target district if filtered
+                if (districtFilter != Entity.Null)
+                {
+                    if (!IsSpanInDistrict(span, districtFilter))
+                        continue;
+                    totalDistrictSpans++;
+                }
 
                 // Skip cul-de-sacs and dead-end roads unless they exceed the user's distance threshold
                 if (excludeDeadEnds && span.IsDeadEnd)
@@ -949,7 +1039,8 @@ namespace AutoBusLines
                 }
             }
 
-            log.Info($"Step 2 Complete: {allGlobalStops.Count} total stops available across the city ({totalStopsPlaced} newly placed, {existingStopsReused} existing reused) with target spacing {targetSpacing:F0}m.");
+            string scopeDesc = districtFilter != Entity.Null ? $"in District '{districtName}' ({totalDistrictSpans} matching spans)" : "across the city";
+            log.Info($"Step 2 Complete: {allGlobalStops.Count} total stops available {scopeDesc} ({totalStopsPlaced} newly placed, {existingStopsReused} existing reused) with target spacing {targetSpacing:F0}m.");
 
             // -------------------------------------------------------------
             // Coverage & Active Routes Verification
@@ -973,7 +1064,9 @@ namespace AutoBusLines
                 _generationStage = GenerationStage.Idle;
                 _hasRun = true;
                 _isManualRequest = false;
-                string statusMsg = $"City transit network is already fully covered by {activeBusLinesInCity} active bus lines ({alreadyCoveredStops.Count} stops served). Use 'Delete All' if you wish to redesign from scratch.";
+                string statusMsg = (districtFilter != Entity.Null)
+                    ? $"All stops in '{districtName}' are already covered by active bus lines."
+                    : $"City transit network is already fully covered by {activeBusLinesInCity} active bus lines ({alreadyCoveredStops.Count} stops served). Use 'Delete All' if you wish to redesign from scratch.";
                 AutoBusLinesUISystem.Instance?.SetPlanStatus("idle", statusMsg);
                 return;
             }
@@ -984,7 +1077,7 @@ namespace AutoBusLines
             // respected, hairpin U-turns are only used at dead ends, and every loop stays within
             // maxRouteLength.
             // -------------------------------------------------------------
-            var allTours = PlanTours(allGlobalStops, allCorridors, minStopsPerLine, maxStopsPerLine, maxRouteLength, alreadyCoveredStops, out var servedStopEntities);
+            var allTours = PlanTours(allGlobalStops, allCorridors, minStopsPerLine, maxStopsPerLine, maxRouteLength, alreadyCoveredStops, districtFilter, out var servedStopEntities);
 
             // Ensure any station platform bays included in planned tours are present in allGlobalStops for accurate tracking
             for (int t = 0; t < allTours.Count; t++)
@@ -1010,13 +1103,29 @@ namespace AutoBusLines
 
             if (allTours.Count == 0)
             {
-                log.Warn("No new bus tours needed or could be formed from the road network.");
+                log.Warn($"No new bus tours formed. Total available stops in scope: {allGlobalStops.Count}. Active lines in city: {activeBusLinesInCity}.");
                 _generationStage = GenerationStage.Idle;
                 _hasRun = true;
                 _isManualRequest = false;
-                string msg = activeBusLinesInCity > 0
-                    ? $"All road corridors and stops are already covered by {activeBusLinesInCity} active bus lines."
-                    : "No valid bus tours could be formed from the road network.";
+                string msg;
+                if (allGlobalStops.Count < ABSOLUTE_MIN_STOPS)
+                {
+                    msg = districtFilter != Entity.Null
+                        ? $"District '{districtName}' contains only {allGlobalStops.Count} bus stops (minimum {ABSOLUTE_MIN_STOPS} required to form a bus route)."
+                        : $"Only {allGlobalStops.Count} bus stops could be placed across the city (minimum {ABSOLUTE_MIN_STOPS} required).";
+                }
+                else if (activeBusLinesInCity > 0 && unservedStopCount == 0)
+                {
+                    msg = districtFilter != Entity.Null
+                        ? $"All stops in District '{districtName}' are already served by active bus lines."
+                        : $"All road corridors and stops are already covered by {activeBusLinesInCity} active bus lines.";
+                }
+                else
+                {
+                    msg = districtFilter != Entity.Null
+                        ? $"No valid bus loops could be closed within District '{districtName}'. Try including adjacent roads or placing more stops."
+                        : "No valid bus tours could be formed from the road network.";
+                }
                 AutoBusLinesUISystem.Instance?.SetPlanStatus("idle", msg);
                 return;
             }

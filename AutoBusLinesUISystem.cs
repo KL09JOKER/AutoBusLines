@@ -2,9 +2,11 @@ using System;
 using System.Collections.Generic;
 using Colossal.Logging;
 using Colossal.UI.Binding;
+using Game.Areas;
 using Game.Rendering;
 using Game.UI;
 using Newtonsoft.Json;
+using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 
@@ -22,6 +24,12 @@ namespace AutoBusLines
         private ValueBinding<string> m_StatusMessage;
         private ValueBinding<int> m_PlanSeed;
         private ValueBinding<string> m_LineColorMode;
+
+        // District & Stops-only bindings
+        private EntityQuery m_DistrictQuery;
+        private ValueBinding<string> m_DistrictsList;
+        private ValueBinding<int> m_SelectedDistrict;
+        private ValueBinding<string> m_StopsOnlyStatus;
 
         // Settings bindings
         private ValueBinding<bool> m_EnablePlanMode;
@@ -90,8 +98,32 @@ namespace AutoBusLines
             AddBinding(new TriggerBinding(kGroup, "repairRoutes", OnRepairRoutes));
             AddBinding(new TriggerBinding(kGroup, "deleteAll", OnDeleteAll));
 
+            // District & Stops-only bindings and triggers
+            m_DistrictQuery = GetEntityQuery(new EntityQueryDesc
+            {
+                All = new ComponentType[]
+                {
+                    ComponentType.ReadOnly<Game.Areas.District>(),
+                    ComponentType.ReadOnly<Game.Areas.Area>(),
+                },
+                None = new ComponentType[]
+                {
+                    ComponentType.ReadOnly<Game.Common.Deleted>(),
+                    ComponentType.ReadOnly<Game.Tools.Temp>(),
+                }
+            });
+
+            AddBinding(m_DistrictsList = new ValueBinding<string>(kGroup, "districtsList", "[]"));
+            AddBinding(m_SelectedDistrict = new ValueBinding<int>(kGroup, "selectedDistrict", 0));
+            AddBinding(m_StopsOnlyStatus = new ValueBinding<string>(kGroup, "stopsOnlyStatus", ""));
+
+            AddBinding(new TriggerBinding<int>(kGroup, "setSelectedDistrict", OnSetSelectedDistrict));
+            AddBinding(new TriggerBinding(kGroup, "placeStopsOnly", OnPlaceStopsOnly));
+            AddBinding(new TriggerBinding(kGroup, "clearUnusedStops", OnClearUnusedStops));
+
             log.Info("AutoBusLinesUISystem created and UI bindings registered successfully!");
             UpdateStopPrefabOptions();
+            UpdateDistrictsList();
         }
 
         protected override void OnGameLoaded(Colossal.Serialization.Entities.Context serializationContext)
@@ -102,6 +134,8 @@ namespace AutoBusLines
             m_StatusMessage.Update("");
             m_PlanSeed.Update(0);
             m_PanelVisible.Update(false);
+            m_StopsOnlyStatus.Update("");
+            m_SelectedDistrict.Update(0);
             HoveredRouteId = 0;
             HoveredStopIndex = -1;
             PlanRouteOverlaySystem.ClearCache();
@@ -109,6 +143,7 @@ namespace AutoBusLines
             var generator = World.GetExistingSystemManaged<BusLineGenerator>();
             generator?.UpdateDiscoveredPrefabs();
             UpdateStopPrefabOptions();
+            UpdateDistrictsList();
         }
 
         public static int HoveredRouteId { get; set; } = 0;
@@ -120,6 +155,7 @@ namespace AutoBusLines
             var generator = World.GetExistingSystemManaged<BusLineGenerator>();
             generator?.UpdateDiscoveredPrefabs();
             UpdateStopPrefabOptions();
+            UpdateDistrictsList();
             m_PanelVisible.Update(true);
         }
 
@@ -182,6 +218,7 @@ namespace AutoBusLines
                 var generator = World.GetExistingSystemManaged<BusLineGenerator>();
                 generator?.UpdateDiscoveredPrefabs();
                 UpdateStopPrefabOptions();
+                UpdateDistrictsList();
             }
             else
             {
@@ -198,6 +235,7 @@ namespace AutoBusLines
             var generator = World.GetExistingSystemManaged<BusLineGenerator>();
             generator?.UpdateDiscoveredPrefabs();
             UpdateStopPrefabOptions();
+            UpdateDistrictsList();
             m_PanelVisible.Update(true);
         }
 
@@ -216,6 +254,7 @@ namespace AutoBusLines
             var generator = World.GetExistingSystemManaged<BusLineGenerator>();
             if (generator != null)
             {
+                generator.TargetDistrictId = m_SelectedDistrict.value;
                 SetPlanStatus("planning", "Analyzing road network and calculating transit corridors...");
                 m_PlanSeed.Update(0);
                 generator.RequestPlan(0);
@@ -230,6 +269,7 @@ namespace AutoBusLines
             var generator = World.GetExistingSystemManaged<BusLineGenerator>();
             if (generator != null)
             {
+                generator.TargetDistrictId = m_SelectedDistrict.value;
                 int nextSeed = m_PlanSeed.value + 1;
                 m_PlanSeed.Update(nextSeed);
                 SetPlanStatus("planning", $"Calculating alternative transit network (Variant #{nextSeed + 1})...");
@@ -492,6 +532,79 @@ namespace AutoBusLines
 
             var optionsJson = JsonConvert.SerializeObject(list);
             m_StopPrefabOptions?.Update(optionsJson);
+        }
+
+        public void UpdateDistrictsList()
+        {
+            var list = new List<object>();
+            list.Add(new { id = 0, name = "All City" });
+
+            if (!m_DistrictQuery.IsEmptyIgnoreFilter)
+            {
+                var entities = m_DistrictQuery.ToEntityArray(Allocator.Temp);
+                var nameSystem = World.GetOrCreateSystemManaged<Game.UI.NameSystem>();
+
+                for (int i = 0; i < entities.Length; i++)
+                {
+                    var e = entities[i];
+                    string dName = nameSystem?.GetRenderedLabelName(e);
+                    if (string.IsNullOrWhiteSpace(dName))
+                    {
+                        dName = $"District {e.Index}";
+                    }
+                    list.Add(new { id = e.Index, name = dName });
+                }
+                entities.Dispose();
+            }
+
+            string json = JsonConvert.SerializeObject(list);
+            m_DistrictsList?.Update(json);
+        }
+
+        private void OnSetSelectedDistrict(int districtId)
+        {
+            m_SelectedDistrict?.Update(districtId);
+            var generator = World.GetExistingSystemManaged<BusLineGenerator>();
+            if (generator != null)
+            {
+                generator.TargetDistrictId = districtId;
+            }
+            log.Info($"Selected District filter changed to ID: {districtId}");
+        }
+
+        private void OnPlaceStopsOnly()
+        {
+            var generator = World.GetExistingSystemManaged<BusLineGenerator>();
+            if (generator == null) return;
+
+            int distId = m_SelectedDistrict.value;
+            Entity districtEntity = generator.FindDistrictEntity(distId);
+
+            var s = Mod.setting;
+            string stopModel = s?.SelectedStopPrefab ?? "All";
+            StopDensityMode density = s?.StopDensity ?? StopDensityMode.Balanced;
+            int spacing = s?.TargetStopSpacing ?? 200;
+
+            m_StopsOnlyStatus?.Update("Analyzing road spans and placing roadside bus stops...");
+            var result = generator.PlaceStopsOnly(districtEntity, stopModel, density, spacing);
+            string msg = $"Successfully placed {result.placed} bus stops in {result.districtName}! ({result.reused} pre-existing stops preserved)";
+            m_StopsOnlyStatus?.Update(msg);
+            log.Info(msg);
+        }
+
+        private void OnClearUnusedStops()
+        {
+            var generator = World.GetExistingSystemManaged<BusLineGenerator>();
+            if (generator == null) return;
+
+            int distId = m_SelectedDistrict.value;
+            Entity districtEntity = generator.FindDistrictEntity(distId);
+
+            m_StopsOnlyStatus?.Update("Scanning for unused bus stops...");
+            var result = generator.ClearUnusedStops(districtEntity);
+            string msg = $"Removed {result.deletedCount} unused roadside bus stops in {result.districtName}.";
+            m_StopsOnlyStatus?.Update(msg);
+            log.Info(msg);
         }
 
         /// <summary>
