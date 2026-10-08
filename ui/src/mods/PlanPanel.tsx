@@ -357,13 +357,13 @@ export const PlanPanel: React.FC<PlanPanelProps> = ({ onClose }) => {
     const prefabOptions: StopModelOption[] = useMemo(() => {
         try {
             const parsed = JSON.parse(prefabOptionsJson);
-            if (Array.isArray(parsed) && parsed.length > 1) {
+            if (Array.isArray(parsed) && parsed.length > 0) {
                 const filtered = parsed
                     .map((item: any) => {
                         if (typeof item === "string") {
                             return {
                                 name: item,
-                                icon: item === "All" ? "Media/Game/Icons/Bus.svg" : "Media/Game/Icons/BusStop.svg"
+                                icon: "Media/Game/Icons/BusStop.svg"
                             };
                         }
                         return {
@@ -372,11 +372,11 @@ export const PlanPanel: React.FC<PlanPanelProps> = ({ onClose }) => {
                         };
                     })
                     .filter(opt => {
-                        if (!opt.name) return false;
+                        if (!opt.name || opt.name.toLowerCase() === "all") return false;
                         const lower = opt.name.toLowerCase();
                         return !lower.includes("integrated") && !lower.includes("placeholder") && !lower.includes("platform");
                     });
-                if (filtered.length > 1) {
+                if (filtered.length > 0) {
                     return filtered;
                 }
             }
@@ -384,11 +384,46 @@ export const PlanPanel: React.FC<PlanPanelProps> = ({ onClose }) => {
             // Ignore error and use default fallback below
         }
 
-        return Object.keys(BUS_STOP_MODELS).map(key => ({
-            name: key,
-            icon: key === "All" ? "Media/Game/Icons/Bus.svg" : "Media/Game/Icons/BusStop.svg"
-        }));
+        return Object.keys(BUS_STOP_MODELS)
+            .filter(key => key.toLowerCase() !== "all")
+            .map(key => ({
+                name: key,
+                icon: "Media/Game/Icons/BusStop.svg"
+            }));
     }, [prefabOptionsJson]);
+
+    const selectedPrefabSet: Set<string> = useMemo(() => {
+        if (!selectedPrefab || selectedPrefab === "All") {
+            return new Set(prefabOptions.map(o => o.name));
+        }
+        const tokens = selectedPrefab.split(/[,;]/).map(s => s.trim()).filter(Boolean);
+        if (tokens.length === 0) {
+            return new Set(prefabOptions.map(o => o.name));
+        }
+        const validNames = new Set(prefabOptions.map(o => o.name));
+        const matched = tokens.filter(t => validNames.has(t));
+        if (matched.length === 0) {
+            return new Set(prefabOptions.map(o => o.name));
+        }
+        return new Set(matched);
+    }, [selectedPrefab, prefabOptions]);
+
+    const togglePrefab = (prefabName: string) => {
+        const next = new Set(selectedPrefabSet);
+        if (next.has(prefabName)) {
+            if (next.size <= 1) return;
+            next.delete(prefabName);
+        } else {
+            next.add(prefabName);
+        }
+        const csv = Array.from(next).join(",");
+        trigger("autoBusLines", "setStopPrefab", csv);
+    };
+
+    const selectAllPrefabs = () => {
+        const allNames = prefabOptions.map(o => o.name);
+        trigger("autoBusLines", "setStopPrefab", allNames.join(","));
+    };
 
     const densityModes = ["Balanced", "Dense", "Ultra", "Low", "Custom"];
 
@@ -526,13 +561,13 @@ export const PlanPanel: React.FC<PlanPanelProps> = ({ onClose }) => {
     const renderPrefabGrid = () => (
         <div className={styles.prefabGrid}>
             {prefabOptions.map((opt) => {
-                const isSelected = (opt.name === "All" && (!selectedPrefab || selectedPrefab === "All")) || selectedPrefab === opt.name;
+                const isSelected = selectedPrefabSet.has(opt.name);
                 const model = getBusStopModelInfo(opt.name, opt.icon);
                 return (
                     <div
                         key={opt.name}
                         className={`${styles.prefabCard} ${isSelected ? styles.prefabActive : ""}`}
-                        onClick={() => trigger("autoBusLines", "setStopPrefab", opt.name)}
+                        onClick={() => togglePrefab(opt.name)}
                     >
                         <div className={styles.prefabThumbnail}>
                             {model.image.startsWith("data:") ? (
@@ -542,18 +577,17 @@ export const PlanPanel: React.FC<PlanPanelProps> = ({ onClose }) => {
                                     <Icon src={model.image} className={styles.prefabLogoIcon} />
                                 </div>
                             )}
+                            <div className={`${styles.prefabCheckBadge} ${isSelected ? styles.prefabCheckBadgeChecked : ""}`}>
+                                {isSelected && <Icon src="Media/Glyphs/Checkmark.svg" className={styles.prefabCheckIcon} tinted={true} />}
+                            </div>
                         </div>
                         <div className={styles.prefabInfo}>
                             <span className={styles.prefabName}>{model.title}</span>
                             <span className={styles.prefabSubtitle}>{model.subtitle}</span>
                         </div>
-                        {opt.name !== "All" ? (
-                            <span className={`${styles.prefabTag} ${model.isCustom ? styles.prefabTagCustom : ""}`}>
-                                {opt.name}
-                            </span>
-                        ) : (
-                            <span className={`${styles.prefabTag} ${styles.prefabTagAll}`}>Random</span>
-                        )}
+                        <span className={`${styles.prefabTag} ${isSelected ? styles.prefabTagActive : (model.isCustom ? styles.prefabTagCustom : "")}`}>
+                            {isSelected ? "Active" : opt.name}
+                        </span>
                     </div>
                 );
             })}
@@ -684,7 +718,26 @@ export const PlanPanel: React.FC<PlanPanelProps> = ({ onClose }) => {
 
                 {/* Bus Stop Model Picker */}
                 <div className={styles.settingsGroup}>
-                    <div className={styles.settingsGroupTitle}>Bus Stop Model</div>
+                    <div className={styles.prefabSectionHeader}>
+                        <div className={styles.settingsGroupTitle}>
+                            Bus Stop Models
+                            <span className={styles.prefabCounterBadge}>
+                                {selectedPrefabSet.size === prefabOptions.length
+                                    ? "All Selected (Random Mix)"
+                                    : `${selectedPrefabSet.size} of ${prefabOptions.length} Active (Random Mix)`}
+                            </span>
+                        </div>
+                        <div className={styles.prefabQuickActions}>
+                            <button
+                                type="button"
+                                className={styles.prefabQuickBtn}
+                                onClick={selectAllPrefabs}
+                                disabled={selectedPrefabSet.size === prefabOptions.length}
+                            >
+                                Select All
+                            </button>
+                        </div>
+                    </div>
                     {renderPrefabGrid()}
                 </div>
 
@@ -701,7 +754,7 @@ export const PlanPanel: React.FC<PlanPanelProps> = ({ onClose }) => {
                                 <div className={styles.actionCardTexts}>
                                     <span className={styles.actionCardTitle}>Place Stops in Area</span>
                                     <span className={styles.actionCardDesc}>
-                                        Place curbside bus stops along roads in {selectedDistrictName} without creating transit routes.
+                                        {`Place curbside bus stops along roads in ${selectedDistrictName} without creating transit routes.`}
                                     </span>
                                 </div>
                             </div>
@@ -723,7 +776,7 @@ export const PlanPanel: React.FC<PlanPanelProps> = ({ onClose }) => {
                                 <div className={styles.actionCardTexts}>
                                     <span className={styles.actionCardTitle}>Clear Unused Stops</span>
                                     <span className={styles.actionCardDesc}>
-                                        Remove orphaned roadside bus stops in {selectedDistrictName} that have no active transit lines.
+                                        {`Remove orphaned roadside bus stops in ${selectedDistrictName} that have no active transit lines.`}
                                     </span>
                                 </div>
                             </div>
@@ -984,11 +1037,30 @@ export const PlanPanel: React.FC<PlanPanelProps> = ({ onClose }) => {
                     )}
 
                     <div className={styles.settingsRowStacked}>
-                        <div className={styles.settingInfo}>
-                            <span className={styles.settingTitle}>Bus Stop Model</span>
-                            <span className={styles.settingDesc}>
-                                Select a specific bus stop prefab model or randomized mix.
-                            </span>
+                        <div className={styles.prefabSectionHeader}>
+                            <div className={styles.settingInfo}>
+                                <span className={styles.settingTitle}>
+                                    Bus Stop Models
+                                    <span className={styles.prefabCounterBadge}>
+                                        {selectedPrefabSet.size === prefabOptions.length
+                                            ? "All Selected (Random Mix)"
+                                            : `${selectedPrefabSet.size} of ${prefabOptions.length} Active`}
+                                    </span>
+                                </span>
+                                <span className={styles.settingDesc}>
+                                    Select which bus stop models to spawn. Multiple selections will be randomly mixed along routes.
+                                </span>
+                            </div>
+                            <div className={styles.prefabQuickActions}>
+                                <button
+                                    type="button"
+                                    className={styles.prefabQuickBtn}
+                                    onClick={selectAllPrefabs}
+                                    disabled={selectedPrefabSet.size === prefabOptions.length}
+                                >
+                                    Select All
+                                </button>
+                            </div>
                         </div>
                         {renderPrefabGrid()}
                     </div>
@@ -1050,7 +1122,7 @@ export const PlanPanel: React.FC<PlanPanelProps> = ({ onClose }) => {
                 </div>
 
                 <div style={{ textAlign: "center", padding: "10rem 0 4rem 0", color: "#718096", fontSize: "11rem", fontWeight: 500 }}>
-                    Auto Bus Lines v2.0.4 · Cities: Skylines II
+                    Auto Bus Lines v2.0.5 · Cities: Skylines II
                 </div>
             </div>
         </Scrollable>

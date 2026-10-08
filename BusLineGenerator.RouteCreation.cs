@@ -12,6 +12,7 @@ using Game.Prefabs;
 using Game.Rendering;
 using Game.Routes;
 using Game.Tools;
+using Game.Vehicles;
 using Unity.Entities;
 using Unity.Collections;
 using Unity.Mathematics;
@@ -272,11 +273,13 @@ namespace AutoBusLines
             int lineCount = 0;
             int waypointCount = 0;
             int segmentCount = 0;
+            int vehicleCount = 0;
 
-            // 1. Delete all TransportLine entities (bus routes) and their child waypoints and segments
+            // 1. Identify all bus line entities (TransportLine with Bus transport type)
             var lineQuery = GetEntityQuery(ComponentType.ReadOnly<Game.Routes.TransportLine>(), ComponentType.Exclude<Deleted>());
             using (var lines = lineQuery.ToEntityArray(Allocator.Temp))
             {
+                var busLines = new List<Entity>();
                 for (int i = 0; i < lines.Length; i++)
                 {
                     var lineEntity = lines[i];
@@ -291,83 +294,195 @@ namespace AutoBusLines
                             var lineData = EntityManager.GetComponentData<TransportLineData>(prefabEntity);
                             if (lineData.m_TransportType == TransportType.Bus)
                             {
-                                // Delete child waypoints and unregister from ConnectedRoute buffers on stops.
-                                // Tagging an entity Deleted is a structural change and invalidates every
-                                // live DynamicBuffer handle, so the child list is snapshotted to a plain
-                                // array before any tagging starts.
-                                if (EntityManager.HasBuffer<RouteWaypoint>(lineEntity))
-                                {
-                                    Entity[] wpEntities;
-                                    {
-                                        var waypoints = EntityManager.GetBuffer<RouteWaypoint>(lineEntity);
-                                        wpEntities = new Entity[waypoints.Length];
-                                        for (int w = 0; w < waypoints.Length; w++)
-                                            wpEntities[w] = waypoints[w].m_Waypoint;
-                                    }
-
-                                    for (int w = 0; w < wpEntities.Length; w++)
-                                    {
-                                        var wpEntity = wpEntities[w];
-                                        if (EntityManager.Exists(wpEntity) && !EntityManager.HasComponent<Deleted>(wpEntity))
-                                        {
-                                            if (EntityManager.HasComponent<Game.Routes.Connected>(wpEntity))
-                                            {
-                                                var connectedStop = EntityManager.GetComponentData<Game.Routes.Connected>(wpEntity).m_Connected;
-                                                if (connectedStop != Entity.Null && EntityManager.Exists(connectedStop) && EntityManager.HasBuffer<ConnectedRoute>(connectedStop))
-                                                {
-                                                    // RemoveAt only resizes the buffer's own storage - not a
-                                                    // structural change - so this handle stays valid here.
-                                                    var connectedRoutes = EntityManager.GetBuffer<ConnectedRoute>(connectedStop);
-                                                    for (int cr = connectedRoutes.Length - 1; cr >= 0; cr--)
-                                                    {
-                                                        if (connectedRoutes[cr].m_Waypoint == wpEntity)
-                                                        {
-                                                            connectedRoutes.RemoveAt(cr);
-                                                        }
-                                                    }
-                                                }
-                                            }
-
-                                            EntityManager.AddComponentData(wpEntity, default(Deleted));
-                                            EntityManager.AddComponentData(wpEntity, default(Updated));
-                                            waypointCount++;
-                                        }
-                                    }
-                                }
-
-                                // Delete child route segments (same snapshot-then-tag ordering)
-                                if (EntityManager.HasBuffer<RouteSegment>(lineEntity))
-                                {
-                                    Entity[] segEntities;
-                                    {
-                                        var segments = EntityManager.GetBuffer<RouteSegment>(lineEntity);
-                                        segEntities = new Entity[segments.Length];
-                                        for (int s = 0; s < segments.Length; s++)
-                                            segEntities[s] = segments[s].m_Segment;
-                                    }
-
-                                    for (int s = 0; s < segEntities.Length; s++)
-                                    {
-                                        var segEntity = segEntities[s];
-                                        if (EntityManager.Exists(segEntity) && !EntityManager.HasComponent<Deleted>(segEntity))
-                                        {
-                                            EntityManager.AddComponentData(segEntity, default(Deleted));
-                                            EntityManager.AddComponentData(segEntity, default(Updated));
-                                            segmentCount++;
-                                        }
-                                    }
-                                }
-
-                                EntityManager.AddComponentData(lineEntity, default(Deleted));
-                                EntityManager.AddComponentData(lineEntity, default(Updated));
-                                lineCount++;
+                                busLines.Add(lineEntity);
                             }
                         }
                     }
                 }
+
+                var busLinesSet = new HashSet<Entity>(busLines);
+                var vehiclesToDelete = new HashSet<Entity>();
+
+                // 2. Collect and safely delete all active buses and cancel pending requests on these lines.
+                // Critical Fix: Leaving orphaned vehicles driving on deleted lines causes TransportCarAISystem
+                // to query empty RouteWaypoint buffers or destroyed stops, causing an immediate Burst crash to desktop (CTD).
+                for (int i = 0; i < busLines.Count; i++)
+                {
+                    var lineEntity = busLines[i];
+
+                    // Check RouteVehicle buffer on line
+                    if (EntityManager.HasBuffer<RouteVehicle>(lineEntity))
+                    {
+                        var routeVehicles = EntityManager.GetBuffer<RouteVehicle>(lineEntity);
+                        for (int rv = 0; rv < routeVehicles.Length; rv++)
+                        {
+                            var veh = routeVehicles[rv].m_Vehicle;
+                            if (veh != Entity.Null && EntityManager.Exists(veh) && !EntityManager.HasComponent<Deleted>(veh))
+                            {
+                                vehiclesToDelete.Add(veh);
+                            }
+                        }
+                    }
+
+                    // Cancel pending vehicle request
+                    if (EntityManager.HasComponent<Game.Routes.TransportLine>(lineEntity))
+                    {
+                        var tLine = EntityManager.GetComponentData<Game.Routes.TransportLine>(lineEntity);
+                        if (tLine.m_VehicleRequest != Entity.Null && EntityManager.Exists(tLine.m_VehicleRequest) && !EntityManager.HasComponent<Deleted>(tLine.m_VehicleRequest))
+                        {
+                            EntityManager.AddComponentData(tLine.m_VehicleRequest, default(Deleted));
+                            EntityManager.AddComponentData(tLine.m_VehicleRequest, default(Updated));
+                        }
+                    }
+
+                    // Cancel dispatched requests in buffer
+                    if (EntityManager.HasBuffer<DispatchedRequest>(lineEntity))
+                    {
+                        var dispBuffer = EntityManager.GetBuffer<DispatchedRequest>(lineEntity);
+                        for (int d = 0; d < dispBuffer.Length; d++)
+                        {
+                            var req = dispBuffer[d].m_VehicleRequest;
+                            if (req != Entity.Null && EntityManager.Exists(req) && !EntityManager.HasComponent<Deleted>(req))
+                            {
+                                EntityManager.AddComponentData(req, default(Deleted));
+                                EntityManager.AddComponentData(req, default(Updated));
+                            }
+                        }
+                    }
+                }
+
+                // Global query for any vehicles whose CurrentRoute references one of our bus lines
+                var vehicleQuery = GetEntityQuery(ComponentType.ReadOnly<CurrentRoute>(), ComponentType.Exclude<Deleted>());
+                using (var worldVehicles = vehicleQuery.ToEntityArray(Allocator.Temp))
+                {
+                    for (int v = 0; v < worldVehicles.Length; v++)
+                    {
+                        var veh = worldVehicles[v];
+                        if (!EntityManager.Exists(veh) || EntityManager.HasComponent<Deleted>(veh))
+                            continue;
+                        var cr = EntityManager.GetComponentData<CurrentRoute>(veh);
+                        if (busLinesSet.Contains(cr.m_Route))
+                        {
+                            vehiclesToDelete.Add(veh);
+                        }
+                    }
+                }
+
+                // Safely delete each vehicle and all its trailer/articulated parts (LayoutElement)
+                foreach (var veh in vehiclesToDelete)
+                {
+                    if (!EntityManager.Exists(veh) || EntityManager.HasComponent<Deleted>(veh))
+                        continue;
+
+                    if (EntityManager.HasBuffer<LayoutElement>(veh))
+                    {
+                        var layout = EntityManager.GetBuffer<LayoutElement>(veh);
+                        for (int l = 0; l < layout.Length; l++)
+                        {
+                            var part = layout[l].m_Vehicle;
+                            if (part != Entity.Null && EntityManager.Exists(part) && !EntityManager.HasComponent<Deleted>(part))
+                            {
+                                EntityManager.AddComponentData(part, default(Deleted));
+                                EntityManager.AddComponentData(part, default(Updated));
+                            }
+                        }
+                    }
+
+                    if (!EntityManager.HasComponent<Deleted>(veh))
+                    {
+                        EntityManager.AddComponentData(veh, default(Deleted));
+                        EntityManager.AddComponentData(veh, default(Updated));
+                    }
+                    vehicleCount++;
+                }
+
+                // 3. Delete child waypoints, clear stop references, and delete segments & line entities
+                for (int i = 0; i < busLines.Count; i++)
+                {
+                    var lineEntity = busLines[i];
+                    if (!EntityManager.Exists(lineEntity) || EntityManager.HasComponent<Deleted>(lineEntity))
+                        continue;
+
+                    // Delete child waypoints and unregister from ConnectedRoute buffers on stops.
+                    // Tagging an entity Deleted is a structural change and invalidates live DynamicBuffer handles,
+                    // so the child list is snapshotted to a plain array before tagging starts.
+                    if (EntityManager.HasBuffer<RouteWaypoint>(lineEntity))
+                    {
+                        Entity[] wpEntities;
+                        {
+                            var waypoints = EntityManager.GetBuffer<RouteWaypoint>(lineEntity);
+                            wpEntities = new Entity[waypoints.Length];
+                            for (int w = 0; w < waypoints.Length; w++)
+                                wpEntities[w] = waypoints[w].m_Waypoint;
+                        }
+
+                        for (int w = 0; w < wpEntities.Length; w++)
+                        {
+                            var wpEntity = wpEntities[w];
+                            if (EntityManager.Exists(wpEntity) && !EntityManager.HasComponent<Deleted>(wpEntity))
+                            {
+                                if (EntityManager.HasComponent<Game.Routes.Connected>(wpEntity))
+                                {
+                                    var connectedStop = EntityManager.GetComponentData<Game.Routes.Connected>(wpEntity).m_Connected;
+                                    if (connectedStop != Entity.Null && EntityManager.Exists(connectedStop))
+                                    {
+                                        // Remove BoardingVehicle on connected stop to avoid dangling vehicle references
+                                        if (EntityManager.HasComponent<BoardingVehicle>(connectedStop))
+                                        {
+                                            EntityManager.RemoveComponent<BoardingVehicle>(connectedStop);
+                                        }
+
+                                        if (EntityManager.HasBuffer<ConnectedRoute>(connectedStop))
+                                        {
+                                            var connectedRoutes = EntityManager.GetBuffer<ConnectedRoute>(connectedStop);
+                                            for (int cr = connectedRoutes.Length - 1; cr >= 0; cr--)
+                                            {
+                                                if (connectedRoutes[cr].m_Waypoint == wpEntity)
+                                                {
+                                                    connectedRoutes.RemoveAt(cr);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                EntityManager.AddComponentData(wpEntity, default(Deleted));
+                                EntityManager.AddComponentData(wpEntity, default(Updated));
+                                waypointCount++;
+                            }
+                        }
+                    }
+
+                    // Delete child route segments (same snapshot-then-tag ordering)
+                    if (EntityManager.HasBuffer<RouteSegment>(lineEntity))
+                    {
+                        Entity[] segEntities;
+                        {
+                            var segments = EntityManager.GetBuffer<RouteSegment>(lineEntity);
+                            segEntities = new Entity[segments.Length];
+                            for (int s = 0; s < segments.Length; s++)
+                                segEntities[s] = segments[s].m_Segment;
+                        }
+
+                        for (int s = 0; s < segEntities.Length; s++)
+                        {
+                            var segEntity = segEntities[s];
+                            if (EntityManager.Exists(segEntity) && !EntityManager.HasComponent<Deleted>(segEntity))
+                            {
+                                EntityManager.AddComponentData(segEntity, default(Deleted));
+                                EntityManager.AddComponentData(segEntity, default(Updated));
+                                segmentCount++;
+                            }
+                        }
+                    }
+
+                    EntityManager.AddComponentData(lineEntity, default(Deleted));
+                    EntityManager.AddComponentData(lineEntity, default(Updated));
+                    lineCount++;
+                }
             }
 
-            // 2. Delete all roadside TransportStop entities (excluding permanent stations/depots)
+            // 4. Delete all roadside TransportStop entities (excluding permanent stations/depots)
             var stopQuery = GetEntityQuery(
                 ComponentType.ReadOnly<Game.Routes.TransportStop>(),
                 ComponentType.Exclude<Deleted>()
@@ -418,6 +533,11 @@ namespace AutoBusLines
                             var stopData = EntityManager.GetComponentData<TransportStopData>(prefabEntity);
                             if (stopData.m_TransportType == TransportType.Bus)
                             {
+                                if (EntityManager.HasComponent<BoardingVehicle>(stopEntity))
+                                {
+                                    EntityManager.RemoveComponent<BoardingVehicle>(stopEntity);
+                                }
+
                                 EntityManager.AddComponentData(stopEntity, default(Deleted));
                                 EntityManager.AddComponentData(stopEntity, default(Updated));
                                 EntityManager.AddComponentData(stopEntity, default(BatchesUpdated));
@@ -434,18 +554,25 @@ namespace AutoBusLines
                 }
             }
 
-            // 3. Reset system state for regeneration
+            // 5. Reset system state for regeneration
             _hasRun = false;
             _isManualRequest = false;
             _generationStage = GenerationStage.Idle;
             _waitFrameCounter = 0;
             _currentTourIndex = 0;
+            _createdLineCount = 0;
             _plannedTours.Clear();
+            _plannedTourColors?.Clear();
+            _activePlan = null;
+            _currentPlanSeed = 0;
             var depotFinder = World.GetExistingSystemManaged<DepotFinderSystem>();
             if (depotFinder != null)
                 depotFinder.Reset();
 
-            log.Info($"Deleted {lineCount} bus lines (with {waypointCount} waypoints and {segmentCount} segments) and {stopCount} roadside bus stops across the city.");
+            AutoBusLinesUISystem.Instance?.UpdatePlan(null, 0, "All bus lines and stops removed.");
+            AutoBusLinesUISystem.Instance?.SetPlanStatus("idle", "All bus lines and stops removed.");
+
+            log.Info($"Deleted {lineCount} bus lines (with {waypointCount} waypoints, {segmentCount} segments, {vehicleCount} vehicles) and {stopCount} roadside bus stops across the city.");
         }
 
         /// <summary>
@@ -1442,39 +1569,70 @@ namespace AutoBusLines
             return len * 1.25f; // Grid and curve driving factor
         }
 
-        private void CreateBusLine(Entity busLinePrefabEntity, RouteData routeData, List<PlacedStop> orderedStops, int lineNumber, int hubIndex = 0, int tourIndex = 0, Color32? customColor = null)
+        private bool CreateBusLine(Entity busLinePrefabEntity, RouteData routeData, List<PlacedStop> orderedStops, int lineNumber, int hubIndex = 0, int tourIndex = 0, Color32? customColor = null)
         {
             if (orderedStops == null || orderedStops.Count == 0)
-                return;
+                return false;
 
-            // Issue #2: Prune any stops that may have been demolished between planning and building
+            // 1. Prune any stops that may have been demolished between planning and building
             orderedStops.RemoveAll(s => !EntityManager.Exists(s.StopEntity) || EntityManager.HasComponent<Deleted>(s.StopEntity));
             if (orderedStops.Count < ABSOLUTE_MIN_STOPS)
             {
                 log.Warn($"CreateBusLine: Line #{lineNumber} aborted because fewer than {ABSOLUTE_MIN_STOPS} valid stops exist ({orderedStops.Count} found).");
-                return;
+                return false;
             }
 
-            // 1. Create the Route entity (TransportLine)
+            // 2. Deduplicate consecutive identical stops and close loops cleanly
+            var uniqueStops = new List<PlacedStop>(orderedStops.Count);
+            for (int i = 0; i < orderedStops.Count; i++)
+            {
+                var s = orderedStops[i];
+                if (uniqueStops.Count > 0 && uniqueStops[uniqueStops.Count - 1].StopEntity == s.StopEntity)
+                    continue;
+                uniqueStops.Add(s);
+            }
+            if (uniqueStops.Count > 1 && uniqueStops[0].StopEntity == uniqueStops[uniqueStops.Count - 1].StopEntity)
+            {
+                uniqueStops.RemoveAt(uniqueStops.Count - 1);
+            }
+
+            if (uniqueStops.Count < ABSOLUTE_MIN_STOPS)
+            {
+                log.Warn($"CreateBusLine: Line #{lineNumber} aborted because fewer than {ABSOLUTE_MIN_STOPS} unique valid stops exist ({uniqueStops.Count} found).");
+                return false;
+            }
+
+            // 3. Create the Route entity (TransportLine)
             Entity routeEntity = EntityManager.CreateEntity(routeData.m_RouteArchetype);
 
             EntityManager.SetComponentData(routeEntity, new PrefabRef(busLinePrefabEntity));
             EntityManager.SetComponentData(routeEntity, new Game.Routes.Route { m_Flags = RouteFlags.Complete });
-            EntityManager.SetComponentData(routeEntity, new Game.Routes.TransportLine());
+
+            // Critical Fix: Properly initialize TransportLine struct with prefab data (vehicle interval & unbunching factor).
+            // A parameterless default struct has 0f vehicle interval and 0f unbunching, which causes TransportLineSystem
+            // vehicle-count calculations to fail and trigger permanent "Not Enough Vehicles" problem warnings.
+            if (EntityManager.HasComponent<TransportLineData>(busLinePrefabEntity))
+            {
+                var transportLineData = EntityManager.GetComponentData<TransportLineData>(busLinePrefabEntity);
+                EntityManager.SetComponentData(routeEntity, new Game.Routes.TransportLine(transportLineData));
+            }
+            else
+            {
+                EntityManager.SetComponentData(routeEntity, new Game.Routes.TransportLine());
+            }
+
             EntityManager.SetComponentData(routeEntity, new RouteNumber { m_Number = lineNumber });
 
             Color32 lineColor = customColor ?? HexToColor(GetLineHexColor(lineNumber));
             EntityManager.SetComponentData(routeEntity, new Game.Routes.Color(lineColor));
             EntityManager.SetComponentData(routeEntity, new RouteBufferIndex { m_Index = -1 });
 
-            var waypointEntities = new List<Entity>(orderedStops.Count);
-
             // Assign custom names to curbside stops if not already set
-            var stopStreetNames = new string[orderedStops.Count];
+            var stopStreetNames = new string[uniqueStops.Count];
             var streetCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            for (int s = 0; s < orderedStops.Count; s++)
+            for (int s = 0; s < uniqueStops.Count; s++)
             {
-                var st = orderedStops[s];
+                var st = uniqueStops[s];
                 if (!st.IsStationBay)
                 {
                     string street = GetRoadStreetName(st.RoadEntity) ?? "Road";
@@ -1484,9 +1642,9 @@ namespace AutoBusLines
             }
 
             var streetIndices = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            for (int i = 0; i < orderedStops.Count; i++)
+            for (int i = 0; i < uniqueStops.Count; i++)
             {
-                var stop = orderedStops[i];
+                var stop = uniqueStops[i];
                 if (!stop.IsStationBay && EntityManager.Exists(stop.StopEntity) && !EntityManager.HasComponent<Deleted>(stop.StopEntity))
                 {
                     string street = stopStreetNames[i] ?? "Road";
@@ -1508,17 +1666,22 @@ namespace AutoBusLines
                 }
             }
 
-            // 2. Create connected Waypoints referencing placed stops
-            for (int i = 0; i < orderedStops.Count; i++)
+            // 4. Create connected Waypoints referencing placed stops with strict sequential indexing.
+            // Critical Fix: Waypoint(wpIndex) MUST use waypointEntities.Count (0..N-1) rather than the raw loop index,
+            // otherwise skipped stops create non-contiguous indices that cause WaypointConnectionSystem and RoutePathSystem
+            // to access out-of-bounds segment buffer indices in Burst jobs -> Hard Crash To Desktop (CTD).
+            var waypointEntities = new List<Entity>(uniqueStops.Count);
+            for (int i = 0; i < uniqueStops.Count; i++)
             {
-                var stop = orderedStops[i];
+                var stop = uniqueStops[i];
                 if (!EntityManager.Exists(stop.StopEntity) || EntityManager.HasComponent<Deleted>(stop.StopEntity))
                     continue;
 
+                int wpIndex = waypointEntities.Count;
                 Entity wpEntity = EntityManager.CreateEntity(routeData.m_ConnectedArchetype);
 
                 EntityManager.SetComponentData(wpEntity, new PrefabRef(busLinePrefabEntity));
-                EntityManager.SetComponentData(wpEntity, new Game.Routes.Waypoint(i));
+                EntityManager.SetComponentData(wpEntity, new Game.Routes.Waypoint(wpIndex));
                 EntityManager.SetComponentData(wpEntity, new Game.Routes.Position(stop.Position));
                 EntityManager.SetComponentData(wpEntity, new Game.Common.Owner(routeEntity));
                 EntityManager.SetComponentData(wpEntity, new Game.Routes.Connected(stop.StopEntity));
@@ -1530,27 +1693,30 @@ namespace AutoBusLines
 
                 waypointEntities.Add(wpEntity);
 
+                // Ensure the ConnectedRoute buffer exists on the stop entity.
+                // Do NOT manually add to ConnectedRoute here: vanilla WaypointConnectionSystem
+                // will automatically register every Waypoint that has the Created component into
+                // the stop's ConnectedRoute buffer. Manually adding it causes duplicate entries.
                 if (!EntityManager.HasBuffer<ConnectedRoute>(stop.StopEntity))
                     EntityManager.AddBuffer<ConnectedRoute>(stop.StopEntity);
-
-                var connBuf = EntityManager.GetBuffer<ConnectedRoute>(stop.StopEntity);
-                bool alreadyIn = false;
-                for (int c = 0; c < connBuf.Length; c++)
-                {
-                    if (connBuf[c].m_Waypoint == wpEntity)
-                    {
-                        alreadyIn = true;
-                        break;
-                    }
-                }
-                if (!alreadyIn)
-                    connBuf.Add(new ConnectedRoute(wpEntity));
 
                 if (!EntityManager.HasComponent<Updated>(stop.StopEntity))
                     EntityManager.AddComponentData(stop.StopEntity, default(Updated));
             }
 
-            // 3. Create Route Segments connecting consecutive waypoints with CurveElement & PathElement buffers
+            // Abort guard if too few valid waypoints were instantiated
+            if (waypointEntities.Count < ABSOLUTE_MIN_STOPS)
+            {
+                log.Warn($"CreateBusLine: Line #{lineNumber} aborted because fewer than {ABSOLUTE_MIN_STOPS} valid waypoints could be created ({waypointEntities.Count} created). Cleaning up.");
+                for (int w = 0; w < waypointEntities.Count; w++)
+                {
+                    EntityManager.DestroyEntity(waypointEntities[w]);
+                }
+                EntityManager.DestroyEntity(routeEntity);
+                return false;
+            }
+
+            // 5. Create Route Segments connecting consecutive waypoints with CurveElement & PathElement buffers
             var segmentEntities = new List<Entity>(waypointEntities.Count);
             for (int i = 0; i < waypointEntities.Count; i++)
             {
@@ -1573,7 +1739,7 @@ namespace AutoBusLines
                 segmentEntities.Add(segEntity);
             }
 
-            // 4. Fill the route's buffers last.
+            // 6. Fill the route's buffers last.
             var waypointsBuffer = EntityManager.GetBuffer<RouteWaypoint>(routeEntity);
             for (int i = 0; i < waypointEntities.Count; i++)
                 waypointsBuffer.Add(new RouteWaypoint(waypointEntities[i]));
@@ -1588,6 +1754,8 @@ namespace AutoBusLines
                 EntityManager.AddComponentData(routeEntity, default(Updated));
             if (!EntityManager.HasComponent<BatchesUpdated>(routeEntity))
                 EntityManager.AddComponentData(routeEntity, default(BatchesUpdated));
+
+            return true;
         }
     }
 }

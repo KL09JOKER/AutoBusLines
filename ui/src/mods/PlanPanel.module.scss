@@ -675,6 +675,7 @@
   gap: 12rem;
   flex: 1;
   min-width: 0;
+  overflow: hidden;
 }
 
 .actionBadge {
@@ -725,6 +726,7 @@
   gap: 2rem;
   flex: 1;
   min-width: 0;
+  overflow: hidden;
 }
 
 .actionCardTitle {
@@ -734,9 +736,14 @@
 }
 
 .actionCardDesc {
+  display: block;
   font-size: 11rem;
   color: #94a3b8;
   line-height: 1.35;
+  white-space: normal;
+  word-wrap: break-word;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 .maintBtn {
@@ -934,6 +941,7 @@
 }
 
 .prefabThumbnail {
+  position: relative;
   width: 90rem;
   height: 90rem;
   min-width: 90rem;
@@ -1052,10 +1060,91 @@
     border-color: rgba(99, 179, 237, 0.3);
   }
 
+  &.prefabTagActive {
+    color: #68d391;
+    background: rgba(72, 187, 120, 0.2);
+    border-color: rgba(72, 187, 120, 0.4);
+    font-weight: 700;
+  }
+
   &.prefabTagCustom {
     color: #ecc94b;
     background: rgba(236, 201, 75, 0.15);
     border-color: rgba(236, 201, 75, 0.3);
+  }
+}
+
+.prefabCheckBadge {
+  position: absolute;
+  top: 4rem;
+  right: 4rem;
+  width: 18rem;
+  height: 18rem;
+  border-radius: 4rem;
+  background: rgba(0, 0, 0, 0.65);
+  border: 1.5rem solid rgba(255, 255, 255, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+
+  &.prefabCheckBadgeChecked {
+    background: #2b6cb0;
+    border-color: #63b3ed;
+  }
+}
+
+.prefabCheckIcon {
+  width: 12rem;
+  height: 12rem;
+  color: #ffffff;
+}
+
+.prefabSectionHeader {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.prefabCounterBadge {
+  font-size: 11rem;
+  font-weight: 500;
+  color: #63b3ed;
+  background: rgba(43, 108, 176, 0.2);
+  border: 1rem solid rgba(99, 179, 237, 0.3);
+  padding: 2rem 8rem;
+  border-radius: 4rem;
+  margin-left: 8rem;
+}
+
+.prefabQuickActions {
+  display: flex;
+  flex-direction: row;
+  gap: 6rem;
+}
+
+.prefabQuickBtn {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1rem solid rgba(255, 255, 255, 0.15);
+  color: #e2e8f0;
+  font-size: 11rem;
+  font-weight: 600;
+  padding: 3rem 10rem;
+  border-radius: 4rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+
+  &:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.15);
+    border-color: #63b3ed;
+    color: #ffffff;
+  }
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
 }
 

@@ -46,7 +46,7 @@ namespace AutoBusLines
         public string HowToUse => string.Empty;
 
         [SettingsUISection(kSection, kVersionGroup)]
-        public string ModVersion => "2.0.4";
+        public string ModVersion => "2.0.5";
 
         // ==========================================
         // Backend / Custom UI Settings (Persisted to Disk)

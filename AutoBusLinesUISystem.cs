@@ -518,7 +518,6 @@ namespace AutoBusLines
             }
 
             var list = new List<object>();
-            list.Add(new { name = "All", icon = "Media/Game/Icons/Bus.svg" });
 
             foreach (var name in Setting.DiscoveredStopPrefabNames)
             {

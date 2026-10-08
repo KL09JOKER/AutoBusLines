@@ -1,4 +1,4 @@
-// AutoBusLines v2.0.4 - Modular transit planning and generation system
+// AutoBusLines v2.0.5 - Modular transit planning and generation system
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -608,14 +608,20 @@ namespace AutoBusLines
                     var tour = _plannedTours[_currentTourIndex];
                     if (tour.Count >= ABSOLUTE_MIN_STOPS)
                     {
-                        _createdLineCount++;
-                        int lineNumber = _createdLineCount;
-                        float routeDistanceKm = CalculateTourLength(tour) / 1000f;
+                        int nextLineNumber = _createdLineCount + 1;
                         Color32? tourColor = (_plannedTourColors != null && _currentTourIndex < _plannedTourColors.Count)
                             ? _plannedTourColors[_currentTourIndex]
                             : (Color32?)null;
-                        CreateBusLine(_cachedBusLinePrefabEntity, _cachedBusLineRouteData, tour, lineNumber, 0, _currentTourIndex, tourColor);
-                        log.Info($"Stage 3: Created Bus Line #{lineNumber} with {tour.Count} stops (Est. Length: {routeDistanceKm:F1} km) [Progress: {_currentTourIndex + 1}/{_plannedTours.Count}]");
+                        if (CreateBusLine(_cachedBusLinePrefabEntity, _cachedBusLineRouteData, tour, nextLineNumber, 0, _currentTourIndex, tourColor))
+                        {
+                            _createdLineCount++;
+                            float routeDistanceKm = CalculateTourLength(tour) / 1000f;
+                            log.Info($"Stage 3: Created Bus Line #{nextLineNumber} with {tour.Count} stops (Est. Length: {routeDistanceKm:F1} km) [Progress: {_currentTourIndex + 1}/{_plannedTours.Count}]");
+                        }
+                        else
+                        {
+                            log.Warn($"Stage 3: Skipped creating Bus Line for tour #{_currentTourIndex + 1} due to insufficient valid stops.");
+                        }
                     }
                     _currentTourIndex++;
                     routesCreatedThisTick++;

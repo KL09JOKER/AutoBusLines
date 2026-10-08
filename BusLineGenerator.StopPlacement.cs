@@ -454,6 +454,13 @@ namespace AutoBusLines
                 }
             }
 
+            if (candidatePrefabs == null || candidatePrefabs.Count == 0)
+            {
+                FindBusStopPrefabs(out candidatePrefabs, out _);
+                if (candidatePrefabs == null || candidatePrefabs.Count == 0)
+                    return false;
+            }
+
             // Check if road can support a bus shelter on the stop's curb side
             // In RHT: even span (not reverse) is on right side; odd span (reverse) is on left side
             // In LHT: reverse
@@ -487,25 +494,29 @@ namespace AutoBusLines
 
                 if (signCandidates.Count > 0)
                 {
-                    // If a specific shelter style was selected, try to match its region theme (NA vs EU)
-                    Entity bestMatch = signCandidates[0];
-                    string targetName = candidatePrefabs.Count > 0 ? GetPrefabName(candidatePrefabs[0]) : "";
-                    if (targetName.StartsWith("NA_", StringComparison.OrdinalIgnoreCase))
+                    bool isSpecificSingleModel = candidatePrefabs.Count == 1;
+                    if (isSpecificSingleModel)
                     {
-                        var naSign = signCandidates.Find(s => GetPrefabName(s).StartsWith("NA_", StringComparison.OrdinalIgnoreCase));
-                        if (naSign != Entity.Null) bestMatch = naSign;
+                        // A specific shelter style was selected: match its region theme if possible
+                        string targetName = GetPrefabName(candidatePrefabs[0]);
+                        Entity match = Entity.Null;
+                        if (targetName.StartsWith("NA_", StringComparison.OrdinalIgnoreCase))
+                        {
+                            match = signCandidates.Find(s => GetPrefabName(s).StartsWith("NA_", StringComparison.OrdinalIgnoreCase));
+                        }
+                        else if (targetName.StartsWith("EU_", StringComparison.OrdinalIgnoreCase))
+                        {
+                            match = signCandidates.Find(s => GetPrefabName(s).StartsWith("EU_", StringComparison.OrdinalIgnoreCase));
+                        }
+
+                        selectedPrefab = (match != Entity.Null) ? match : signCandidates[0];
                     }
-                    else if (targetName.StartsWith("EU_", StringComparison.OrdinalIgnoreCase))
+                    else
                     {
-                        var euSign = signCandidates.Find(s => GetPrefabName(s).StartsWith("EU_", StringComparison.OrdinalIgnoreCase));
-                        if (euSign != Entity.Null) bestMatch = euSign;
-                    }
-                    else if (signCandidates.Count > 1)
-                    {
+                        // Random mode: pick randomly from available signs
                         int randIdx = rng.NextInt(0, signCandidates.Count);
-                        bestMatch = signCandidates[randIdx];
+                        selectedPrefab = signCandidates[randIdx];
                     }
-                    selectedPrefab = bestMatch;
                 }
                 else
                 {
@@ -514,11 +525,14 @@ namespace AutoBusLines
             }
             else
             {
-                selectedPrefab = candidatePrefabs[0];
                 if (candidatePrefabs.Count > 1)
                 {
                     int randIdx = rng.NextInt(0, candidatePrefabs.Count);
                     selectedPrefab = candidatePrefabs[randIdx];
+                }
+                else
+                {
+                    selectedPrefab = candidatePrefabs[0];
                 }
             }
 
@@ -593,6 +607,10 @@ namespace AutoBusLines
                 {
                     var netComp = EntityManager.GetComponentData<NetCompositionData>(comp.m_Edge);
 
+                    // Gravel or unpaved road surfaces cannot support bus shelters
+                    if ((netComp.m_Flags.m_General & CompositionFlags.General.Gravel) != 0)
+                        return false;
+
                     // Roads with total width <= 10m (like 8m alleys) are too narrow for bus shelters
                     if (netComp.m_Width <= 10.0f)
                         return false;
@@ -601,28 +619,6 @@ namespace AutoBusLines
                     var sideFlags = isRightSide ? netComp.m_Flags.m_Right : netComp.m_Flags.m_Left;
                     if ((sideFlags & (CompositionFlags.Side.Sidewalk | CompositionFlags.Side.WideSidewalk)) == 0)
                         return false;
-
-                    // If NetCompositionArea buffer exists, check for buildable area of sufficient width
-                    if (EntityManager.HasBuffer<NetCompositionArea>(comp.m_Edge))
-                    {
-                        var areas = EntityManager.GetBuffer<NetCompositionArea>(comp.m_Edge);
-                        bool hasSufficientArea = false;
-                        for (int i = 0; i < areas.Length; i++)
-                        {
-                            var area = areas[i];
-                            if ((area.m_Flags & NetAreaFlags.Buildable) != 0 && area.m_Width >= 1.5f)
-                            {
-                                // Verify area is on the correct side (positive x is right side, negative x is left side)
-                                if ((isRightSide && area.m_Position.x > 0f) || (!isRightSide && area.m_Position.x < 0f))
-                                {
-                                    hasSufficientArea = true;
-                                    break;
-                                }
-                            }
-                        }
-                        if (!hasSufficientArea && areas.Length > 0)
-                            return false;
-                    }
                 }
             }
 
@@ -1762,7 +1758,7 @@ namespace AutoBusLines
             var stopDataArray = _busStopPrefabQuery.ToComponentDataArray<TransportStopData>(Allocator.Temp);
 
             var allValidPrefabs = new List<Entity>();
-            var nameToEntity = new Dictionary<string, Entity>();
+            var nameToEntity = new Dictionary<string, Entity>(StringComparer.OrdinalIgnoreCase);
             var discovered = new List<string>();
 
             for (int i = 0; i < entities.Length; i++)
@@ -1842,27 +1838,35 @@ namespace AutoBusLines
 
             defaultPrefab = allValidPrefabs[0];
 
-            string selectedModel = Mod.setting != null ? Mod.setting.SelectedStopPrefab : "All";
-            if (string.IsNullOrEmpty(selectedModel) || selectedModel == "All")
+            string selectedModel = Mod.setting != null ? Mod.setting.SelectedStopPrefab : "";
+            if (string.IsNullOrEmpty(selectedModel) || selectedModel.Equals("All", StringComparison.OrdinalIgnoreCase))
             {
                 candidatePrefabs.AddRange(allValidPrefabs);
-            }
-            else if (nameToEntity.TryGetValue(selectedModel, out Entity match))
-            {
-                candidatePrefabs.Add(match);
             }
             else
             {
-                // Fallback if previous model was removed or invalid (e.g. Integrated Bus Stop)
-                if (Mod.setting != null)
+                var selectedNames = selectedModel.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries);
+                var matched = new HashSet<Entity>();
+                for (int i = 0; i < selectedNames.Length; i++)
                 {
-                    Mod.setting.SelectedStopPrefab = "All";
-                    Mod.setting.Apply();
+                    string trimmed = selectedNames[i].Trim();
+                    if (nameToEntity.TryGetValue(trimmed, out Entity match) && match != Entity.Null)
+                    {
+                        if (matched.Add(match))
+                        {
+                            candidatePrefabs.Add(match);
+                        }
+                    }
                 }
-                candidatePrefabs.AddRange(allValidPrefabs);
+
+                if (candidatePrefabs.Count == 0)
+                {
+                    // Fallback to all valid prefabs if none of the selected models match
+                    candidatePrefabs.AddRange(allValidPrefabs);
+                }
             }
 
-            log.Info($"Active Bus Stop Prefab Pool: {candidatePrefabs.Count} prefabs available for placement (Selected Model: '{selectedModel}')");
+            log.Info($"Active Bus Stop Prefab Pool: {candidatePrefabs.Count} prefabs available for placement (Selected Models: '{selectedModel}')");
             return true;
         }
 
@@ -2043,15 +2047,22 @@ namespace AutoBusLines
                 return (0, 0, districtName);
             }
 
-            // Filter candidate prefabs to chosen model if specified
-            if (!string.IsNullOrEmpty(stopModel) && stopModel != "All")
+            // Filter candidate prefabs to chosen models if specified
+            if (!string.IsNullOrEmpty(stopModel) && !stopModel.Equals("All", StringComparison.OrdinalIgnoreCase))
             {
+                var selectedNames = stopModel.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries);
                 var specific = new List<Entity>();
                 for (int i = 0; i < candidatePrefabs.Count; i++)
                 {
-                    if (string.Equals(GetPrefabName(candidatePrefabs[i]), stopModel, StringComparison.OrdinalIgnoreCase))
+                    string name = GetPrefabName(candidatePrefabs[i]);
+                    for (int j = 0; j < selectedNames.Length; j++)
                     {
-                        specific.Add(candidatePrefabs[i]);
+                        if (string.Equals(name, selectedNames[j].Trim(), StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (!specific.Contains(candidatePrefabs[i]))
+                                specific.Add(candidatePrefabs[i]);
+                            break;
+                        }
                     }
                 }
                 if (specific.Count > 0)
@@ -2125,7 +2136,9 @@ namespace AutoBusLines
             bool excludeDeadEnds = Mod.setting != null ? Mod.setting.ExcludeDeadEnds : true;
             float deadEndThreshold = Mod.setting != null ? (float)Mod.setting.DeadEndDistanceThreshold : 300f;
             float minSpanLength = math.max(45.0f, effectiveSpacing * 0.25f);
-            var rng = new Unity.Mathematics.Random((uint)Environment.TickCount);
+            uint seed = (uint)Math.Max(1, Math.Abs(Environment.TickCount));
+            if (seed == 0) seed = 185392u;
+            var rng = new Unity.Mathematics.Random(seed);
 
             int totalStopsPlaced = 0;
             int existingReused = 0;
@@ -2269,11 +2282,21 @@ namespace AutoBusLines
                         }
                     }
 
-                    // Check if this stop has any connected transit routes
+                    // Check if this stop has any active, connected transit routes
                     if (EntityManager.HasBuffer<ConnectedRoute>(stopEntity))
                     {
                         var routes = EntityManager.GetBuffer<ConnectedRoute>(stopEntity);
-                        if (routes.Length > 0)
+                        bool hasActiveRoute = false;
+                        for (int r = 0; r < routes.Length; r++)
+                        {
+                            var wp = routes[r].m_Waypoint;
+                            if (wp != Entity.Null && EntityManager.Exists(wp) && !EntityManager.HasComponent<Deleted>(wp))
+                            {
+                                hasActiveRoute = true;
+                                break;
+                            }
+                        }
+                        if (hasActiveRoute)
                         {
                             continue; // In use!
                         }
