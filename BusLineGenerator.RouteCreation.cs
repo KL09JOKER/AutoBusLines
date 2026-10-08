@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Colossal.Logging;
 using Colossal.Mathematics;
@@ -811,16 +811,11 @@ namespace AutoBusLines
             float3 newStopPos = newRoadPos + normal * lateralDist;
             newStopPos.y = newRoadPos.y;
 
-            // Preserve stop rotation along road direction
-            quaternion newRot = currentTransform.m_Rotation;
-            if (math.lengthsq(newRoadForward) > 0.1f)
-            {
-                float3 curFacing = math.rotate(currentTransform.m_Rotation, new float3(0, 0, 1));
-                if (math.dot(curFacing, curRoadForward) < 0f)
-                    newRot = quaternion.LookRotationSafe(-newRoadForward, new float3(0, 1, 0));
-                else
-                    newRot = quaternion.LookRotationSafe(newRoadForward, new float3(0, 1, 0));
-            }
+            // Set stop rotation facing inward toward the road centerline from the curb
+            float3 toRoad = math.normalizesafe(new float3(newRoadPos.x - newStopPos.x, 0f, newRoadPos.z - newStopPos.z));
+            if (math.lengthsq(toRoad) < 0.001f)
+                toRoad = -normal;
+            quaternion newRot = quaternion.LookRotationSafe(toRoad, new float3(0, 1, 0));
 
             // Apply updated Attached and Transform to stop
             EntityManager.SetComponentData(stopEntity, new Attached(roadEntity, Entity.Null, newT));

@@ -454,12 +454,72 @@ namespace AutoBusLines
                 }
             }
 
+            // Check if road can support a bus shelter on the stop's curb side
+            // In RHT: even span (not reverse) is on right side; odd span (reverse) is on left side
+            // In LHT: reverse
+            bool isStopOnRightSide = isLeftHandTraffic ? isReverseSide : !isReverseSide;
+            bool roadSupportsShelter = CanRoadSupportBusShelter(roadEntity, isStopOnRightSide);
+
             // Select bus stop prefab from candidate pool (randomized if multiple, or exact if 1 selected)
-            Entity selectedPrefab = candidatePrefabs[0];
-            if (candidatePrefabs.Count > 1)
+            Entity selectedPrefab;
+            if (!roadSupportsShelter)
             {
-                int randIdx = rng.NextInt(0, candidatePrefabs.Count);
-                selectedPrefab = candidatePrefabs[randIdx];
+                // Road does not support shelters (e.g. alley, gravel/dirt road, no sidewalk, narrow road <= 10m).
+                // Filter candidates to Bus Stop Signs only.
+                var signCandidates = new List<Entity>();
+                for (int i = 0; i < candidatePrefabs.Count; i++)
+                {
+                    if (IsBusStopSign(candidatePrefabs[i]))
+                        signCandidates.Add(candidatePrefabs[i]);
+                }
+
+                // If candidate pool didn't contain signs (e.g. user selected a specific shelter model in UI),
+                // fall back to any discovered sign prefab.
+                if (signCandidates.Count == 0)
+                {
+                    FindBusStopPrefabs(out var allPrefabs, out _);
+                    for (int i = 0; i < allPrefabs.Count; i++)
+                    {
+                        if (IsBusStopSign(allPrefabs[i]))
+                            signCandidates.Add(allPrefabs[i]);
+                    }
+                }
+
+                if (signCandidates.Count > 0)
+                {
+                    // If a specific shelter style was selected, try to match its region theme (NA vs EU)
+                    Entity bestMatch = signCandidates[0];
+                    string targetName = candidatePrefabs.Count > 0 ? GetPrefabName(candidatePrefabs[0]) : "";
+                    if (targetName.StartsWith("NA_", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var naSign = signCandidates.Find(s => GetPrefabName(s).StartsWith("NA_", StringComparison.OrdinalIgnoreCase));
+                        if (naSign != Entity.Null) bestMatch = naSign;
+                    }
+                    else if (targetName.StartsWith("EU_", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var euSign = signCandidates.Find(s => GetPrefabName(s).StartsWith("EU_", StringComparison.OrdinalIgnoreCase));
+                        if (euSign != Entity.Null) bestMatch = euSign;
+                    }
+                    else if (signCandidates.Count > 1)
+                    {
+                        int randIdx = rng.NextInt(0, signCandidates.Count);
+                        bestMatch = signCandidates[randIdx];
+                    }
+                    selectedPrefab = bestMatch;
+                }
+                else
+                {
+                    selectedPrefab = candidatePrefabs[0];
+                }
+            }
+            else
+            {
+                selectedPrefab = candidatePrefabs[0];
+                if (candidatePrefabs.Count > 1)
+                {
+                    int randIdx = rng.NextInt(0, candidatePrefabs.Count);
+                    selectedPrefab = candidatePrefabs[randIdx];
+                }
             }
 
             if (planOnly)
@@ -499,13 +559,155 @@ namespace AutoBusLines
             return true;
         }
 
+        private bool CanRoadSupportBusShelter(Entity roadEntity, bool isRightSide)
+        {
+            if (roadEntity == Entity.Null || !EntityManager.Exists(roadEntity))
+                return false;
+
+            // 1. Check if the road is an alley or gravel/dirt/unpaved road by prefab name
+            if (EntityManager.HasComponent<PrefabRef>(roadEntity))
+            {
+                var prefabRef = EntityManager.GetComponentData<PrefabRef>(roadEntity);
+                string pName = GetPrefabName(prefabRef.m_Prefab);
+                if (!string.IsNullOrEmpty(pName))
+                {
+                    if (pName.IndexOf("Alley", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        pName.IndexOf("Gravel", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        pName.IndexOf("Dirt", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        pName.IndexOf("Unpaved", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        pName.IndexOf("Highway", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        pName.IndexOf("Freeway", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        pName.IndexOf("Motorway", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        pName.IndexOf("Ramp", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            // 2. Check Composition and NetCompositionData
+            if (EntityManager.HasComponent<Composition>(roadEntity))
+            {
+                var comp = EntityManager.GetComponentData<Composition>(roadEntity);
+                if (comp.m_Edge != Entity.Null && EntityManager.HasComponent<NetCompositionData>(comp.m_Edge))
+                {
+                    var netComp = EntityManager.GetComponentData<NetCompositionData>(comp.m_Edge);
+
+                    // Roads with total width <= 10m (like 8m alleys) are too narrow for bus shelters
+                    if (netComp.m_Width <= 10.0f)
+                        return false;
+
+                    // Check if the target side has a sidewalk
+                    var sideFlags = isRightSide ? netComp.m_Flags.m_Right : netComp.m_Flags.m_Left;
+                    if ((sideFlags & (CompositionFlags.Side.Sidewalk | CompositionFlags.Side.WideSidewalk)) == 0)
+                        return false;
+
+                    // If NetCompositionArea buffer exists, check for buildable area of sufficient width
+                    if (EntityManager.HasBuffer<NetCompositionArea>(comp.m_Edge))
+                    {
+                        var areas = EntityManager.GetBuffer<NetCompositionArea>(comp.m_Edge);
+                        bool hasSufficientArea = false;
+                        for (int i = 0; i < areas.Length; i++)
+                        {
+                            var area = areas[i];
+                            if ((area.m_Flags & NetAreaFlags.Buildable) != 0 && area.m_Width >= 1.5f)
+                            {
+                                // Verify area is on the correct side (positive x is right side, negative x is left side)
+                                if ((isRightSide && area.m_Position.x > 0f) || (!isRightSide && area.m_Position.x < 0f))
+                                {
+                                    hasSufficientArea = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!hasSufficientArea && areas.Length > 0)
+                            return false;
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        private bool IsBusStopSign(Entity prefabEntity)
+        {
+            if (prefabEntity == Entity.Null || !EntityManager.Exists(prefabEntity))
+                return false;
+
+            string name = GetPrefabName(prefabEntity);
+            if (!string.IsNullOrEmpty(name))
+            {
+                // Explicit sign checks
+                if (name.IndexOf("Sign", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    name.IndexOf("Pole", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    name.Equals("EU_BusStop01", StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals("NA_BusStop01", StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals("Pack7-BusStop01", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                // Explicit shelter checks
+                if (name.IndexOf("Shelter", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    name.IndexOf("Bicycle", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    name.IndexOf("Bike", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    name.Equals("EU_BusStop02", StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals("NA_BusStop02", StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+            }
+
+            // Geometry check fallback for modded assets
+            if (EntityManager.HasComponent<ObjectGeometryData>(prefabEntity))
+            {
+                var geom = EntityManager.GetComponentData<ObjectGeometryData>(prefabEntity);
+                // Signs typically have small footprint (depth < 1.0m, width < 2.0m)
+                if (geom.m_Size.z < 1.0f && geom.m_Size.x < 2.0f)
+                    return true;
+            }
+
+            return false;
+        }
+
         private bool TryCreateBusStopEntity(Entity roadEntity, float t, float3 pos, float3 forward, Entity hubEntity, int corridorIndex, int spanOrderInCorridor, bool isOutbound, Entity busStopPrefabEntity, out PlacedStop stop)
         {
             stop = default;
             if (IsElevatedOrBridge(roadEntity))
                 return false;
 
-            quaternion rot = quaternion.LookRotationSafe(forward, new float3(0, 1, 0));
+            // Rotation: bus stop should face directly toward the road centerline from the curb
+            float3 toRoad;
+            if (EntityManager.HasComponent<Curve>(roadEntity))
+            {
+                var roadCurve = EntityManager.GetComponentData<Curve>(roadEntity);
+                float3 roadCenter = MathUtils.Position(roadCurve.m_Bezier, t);
+                toRoad = math.normalizesafe(new float3(roadCenter.x - pos.x, 0f, roadCenter.z - pos.z));
+            }
+            else
+            {
+                bool isLeftHandTraffic = false;
+                var cityConfig = World.GetExistingSystemManaged<Game.City.CityConfigurationSystem>();
+                if (cityConfig != null)
+                    isLeftHandTraffic = cityConfig.leftHandTraffic;
+                float3 curbNormal = isLeftHandTraffic 
+                    ? new float3(-forward.z, 0f, forward.x) 
+                    : new float3(forward.z, 0f, -forward.x);
+                toRoad = -curbNormal;
+            }
+            if (math.lengthsq(toRoad) < 0.001f)
+            {
+                bool isLeftHandTraffic = false;
+                var cityConfig = World.GetExistingSystemManaged<Game.City.CityConfigurationSystem>();
+                if (cityConfig != null)
+                    isLeftHandTraffic = cityConfig.leftHandTraffic;
+                float3 curbNormal = isLeftHandTraffic 
+                    ? new float3(-forward.z, 0f, forward.x) 
+                    : new float3(forward.z, 0f, -forward.x);
+                toRoad = -curbNormal;
+            }
+
+            quaternion rot = quaternion.LookRotationSafe(toRoad, new float3(0, 1, 0));
 
             if (!EntityManager.HasComponent<ObjectData>(busStopPrefabEntity))
             {
@@ -1720,6 +1922,47 @@ namespace AutoBusLines
                 else if (EntityManager.HasComponent<Game.Common.Owner>(stopEntity))
                 {
                     attachedRoad = EntityManager.GetComponentData<Game.Common.Owner>(stopEntity).m_Owner;
+                }
+
+                // If attached to a road with a Curve, derive true road travel forward tangent
+                if (attachedRoad != Entity.Null && EntityManager.HasComponent<Curve>(attachedRoad))
+                {
+                    var roadCurve = EntityManager.GetComponentData<Curve>(attachedRoad);
+                    float attachedT = 0.5f;
+                    if (EntityManager.HasComponent<Attached>(stopEntity))
+                    {
+                        attachedT = EntityManager.GetComponentData<Attached>(stopEntity).m_CurvePosition;
+                    }
+                    else
+                    {
+                        MathUtils.Distance(roadCurve.m_Bezier, stopPos, out attachedT);
+                    }
+
+                    float3 roadTangent = MathUtils.Tangent(roadCurve.m_Bezier, attachedT);
+                    float3 roadForward = math.normalizesafe(new float3(roadTangent.x, 0f, roadTangent.z));
+
+                    bool isLeftHandTraffic = false;
+                    var cityConfig = World.GetExistingSystemManaged<Game.City.CityConfigurationSystem>();
+                    if (cityConfig != null)
+                    {
+                        isLeftHandTraffic = cityConfig.leftHandTraffic;
+                    }
+
+                    float3 roadPosOnCurve = MathUtils.Position(roadCurve.m_Bezier, attachedT);
+                    float3 offset = stopPos - roadPosOnCurve;
+                    float3 rightNorm = new float3(roadForward.z, 0f, -roadForward.x);
+                    bool isOnRightSide = math.dot(offset, rightNorm) >= 0f;
+
+                    // In RHT: right side travels in roadForward, left side travels in -roadForward
+                    // In LHT: left side travels in roadForward, right side travels in -roadForward
+                    if (isLeftHandTraffic)
+                    {
+                        stopForward = isOnRightSide ? -roadForward : roadForward;
+                    }
+                    else
+                    {
+                        stopForward = isOnRightSide ? roadForward : -roadForward;
+                    }
                 }
 
                 // If a roadside stop erroneously has Owner(road), strip it so it becomes interactable immediately

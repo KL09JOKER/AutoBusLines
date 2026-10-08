@@ -2,7 +2,7 @@
 
 [![Paradox Mods](https://img.shields.io/badge/Paradox%20Mods-161531-blue.svg)](https://mods.paradoxplaza.com/mods/161531/Windows)
 [![Cities: Skylines II](https://img.shields.io/badge/Cities:%20Skylines%20II-Mod-orange.svg)](https://www.paradoxinteractive.com/games/cities-skylines-ii)
-[![Version](https://img.shields.io/badge/Version-2.0.3-green.svg)](https://mods.paradoxplaza.com/mods/161531/Windows)
+[![Version](https://img.shields.io/badge/Version-2.0.4-green.svg)](https://mods.paradoxplaza.com/mods/161531/Windows)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE.md)
 
 Auto Bus Lines automatically designs and constructs complete, functional bus transit networks across your entire city. Open the planner, calculate a transit plan, review it interactively, tweak what you want, and hit **Build Selected**.

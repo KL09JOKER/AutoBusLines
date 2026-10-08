@@ -1050,7 +1050,7 @@ export const PlanPanel: React.FC<PlanPanelProps> = ({ onClose }) => {
                 </div>
 
                 <div style={{ textAlign: "center", padding: "10rem 0 4rem 0", color: "#718096", fontSize: "11rem", fontWeight: 500 }}>
-                    Auto Bus Lines v2.0.3 · Cities: Skylines II
+                    Auto Bus Lines v2.0.4 · Cities: Skylines II
                 </div>
             </div>
         </Scrollable>
